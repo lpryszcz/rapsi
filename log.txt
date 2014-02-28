@@ -1,0 +1,30 @@
+##BLAST
+#33:27 #need to edit blastdb/nr.fa.pal and remove blastdb/ from all lines
+time formatdb -i nr.fa -n blastdb/nr.fa
+#7:54
+time blastall -pblastp -d blastdb/nr.fa -i hox.fa -m 8
+
+##RAPSI
+#11h
+src/fasta2hash.py -vr -i nr.fa -d nr.fa.db3 --seqlimit 30000
+src/fasta2hash.py -vr -i nr.fa -d nr.fa.db3_zlib --seqlimit 30000
+#14.6s
+src/fasta2hits.py -v -d nr.fa.db3 -i hox.fa --seqlimit 1000
+
+
+#pfamA
+wget ftp://ftp.sanger.ac.uk/pub/databases/Pfam/current_release/Pfam-A.regions.tsv.gz 
+wget -O- ftp://ftp.sanger.ac.uk/pub/databases/Pfam/current_release/pfamseq.gz | zcat > pfam.fa
+
+src/fasta2hash.py -vr -i pfam.fa -d pfam.fa.db3 --seqlimit 20000
+src/fasta2hash.py -vr -i pfam.fa -d pfam.fa.db3_zlib --seqlimit 20000
+
+#
+src/fasta2hash.py -vr -i swissprot.fa -d swissprot.fa.db3
+
+src/fasta2hash.py -v -i ~/cluster/metaphors/fasta_201310/*.faa -d metaphors_201310.db3 --seqlimit 2000
+
+#benchmarking
+python rapsi.benchmark_local.py swissprot.fa
+python rapsi.benchmark_local.py pfam.fa
+
