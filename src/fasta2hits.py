@@ -1,23 +1,31 @@
 #!/usr/bin/env python
-desc="""Scan hash table and report matches.
-
-For searches for relatively similar sequences, sequence sampling is recommended.
+desc="""Scan hash table and report matches. For searches for relatively similar
+sequences, sequence sampling is recommended.
 
 PARAMETERS EXAMPLES:
  --link  "<a target=_blank href='/?q=SeqInfo&seqid=Phy%s'>Phy%s</a>"
 
-TO ADD:
-- url input scanning for str threats like ", '
-
 python wsgi/fasta2hits.py -vi ../test.fa --host cgenomics.crg.es -uscript -ppython --seqcmd "select concat(p.protid,'_',code), seq from protid2taxid p join protid2seq ps join species s on p.protid=ps.protid and p.taxid=s.taxid where p.protid in (%s)"
+
 """
 epilog="""Author:
 l.p.pryszcz@gmail.com
 
-Barcelona, 13/11/2013
+Barcelona/Mizerow, 13/11/2013
+
+TO ADD:
+- url input scanning for str threats like ", '
+
+
+CHANGELOG:
+v1.1:
+- implemented nucleotide query (rapsiX)
+- FastQ, genbank, embl support
+- auto query format recognition
+
 """
 
-import commands, os, sys, time, zlib
+import commands, gzip, os, sys, time, zlib
 import MySQLdb, resource, sqlite3
 from datetime import datetime
 from Bio import SeqIO
@@ -48,13 +56,14 @@ def mysql2seq(cur, protids, seqcmd, intprotids):
     cur.execute(seqcmd % protidstext)
     return [">%s\n%s\n" % tup for tup in cur.fetchall()]
     
-def seq2matches(cur, db, table, seqcmd, qid, qseq, kmer, step, seqlimit, sampling, \
+def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampling, \
                 intprotids, verbose):
     """Return matching protids and sequences"""
     if verbose:
-        sys.stderr.write("Parsing %s aminos from: %s...\n" % (len(qseq), qid))
-    #mers = seq2mers(qseq, kmer, step, seqlimit, nosampling, verbose)
-    mers = seq2mers(qseq, kmer, step)
+        sys.stderr.write("Parsing %s aminos from: %s...\n" % (len("".join(qseqs)), qid))
+    mers = set()
+    for qseq in qseqs:
+        mers = mers.union(seq2mers(qseq, kmer, step))
     if verbose:
         sys.stderr.write("  %s mers: %s...\n"% (len(mers),", ".join(list(mers)[:6])))
     if sampling and len(mers)>sampling:
@@ -67,7 +76,8 @@ def seq2matches(cur, db, table, seqcmd, qid, qseq, kmer, step, seqlimit, samplin
     protids = {}
     for merprotids, in cur:
         #decode zlib coded str
-        if not seqcmd: merprotids = zlib.decompress(merprotids)
+        if not seqcmd:
+            merprotids = zlib.decompress(merprotids)
         for protid in merprotids.split():
             #decode b62 int only for sqlite3
             #if not seqcmd: protid = b62decode(protid)
@@ -104,23 +114,24 @@ def seq2matches(cur, db, table, seqcmd, qid, qseq, kmer, step, seqlimit, samplin
         targets = sqlite2seq(cur, db, fprotids)
     return targets
     
-def hits2algs(qname, qseq, matches, blatpath, tmpdir, link, verbose):
+def hits2algs(qname, qseqs, matches, blatpath, tmpdir, link, verbose):
     """Align query with hits and return global algs."""
     if verbose:
         sys.stderr.write(" Aligning...\n")    
     algs = []
     #prepare files - add timestamp
-    tmpfn = os.path.join(tmpdir,"tmp.%s"%time.time())#pid%s"%os.getpid())
+    tmpfn = os.path.join(tmpdir, "tmp.%s"%time.time())
+    #write query
     tmpq = "%s.query" % tmpfn
-    tmpqf = open(tmpq, "w")
-    tmpqf.write(">%s\n%s\n"%(qname, qseq))
-    tmpqf.close()
+    with open(tmpq, "w") as tmpqf:
+        for i, qseq in enumerate(qseqs, 1):
+            tmpqf.write(">%s.%s\n%s\n"%(qname, i, qseq))
+    #write targets
     tmpt = "%s.target" % tmpfn
-    tmptf = open(tmpt, "w")
-    tmptf.write("".join(matches))
-    tmptf.close()
-    tmpr = "%s.out" % tmpfn
+    with open(tmpt, "w") as tmptf:
+        tmptf.write("".join(matches))
     #run blat
+    tmpr = "%s.out" % tmpfn
     cmd  = "%s -prot -noHead %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
     if verbose:
         sys.stderr.write("  %s\n"%cmd)
@@ -205,44 +216,69 @@ def algs2formatted_output(algs, html, verbose):
     else:
         return blastTable.asTXT()
 
-def fasta2hits(cur, db, table, seqcmd, qid, qseq, blatpath, tmpdir, kmer, step, \
+def fasta2hits(cur, db, table, seqcmd, qid, qseqs, blatpath, tmpdir, kmer, step, \
                seqlimit, html, link, sampling, intprotids, verbose):
-    """Report hits to qseq from hash table and sequences. """
+    """Report hits to qseq from hash table and sequences.
+    Deals with both, single seq and list of translated sequences.
+    """
     t0 = time.time()
+    #deal with single sequence
+    if type(qseqs) is str:
+        qseqs = (qseqs, )
     #get kmer matching sequences
-    matches = seq2matches(cur, db, table, seqcmd, qid, qseq, kmer, step, seqlimit, \
+    matches = seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, \
                           sampling, intprotids, verbose)
 
     if not matches:
         return "#Your query %s didn't produce any hit.\n"%qid
     
     #align with blat
-    algs = hits2algs(qid, qseq, matches, blatpath, tmpdir, link, verbose)
+    algs = hits2algs(qid, qseqs, matches, blatpath, tmpdir, link, verbose)
 
     if not algs:
         return "#Your query %s didn't produce any valid hit.\n"%qid
     
     #return formatted output
     out  = algs2formatted_output(algs, html, verbose)
+    #write run stats
     dt = time.time() - t0
-    open(os.path.join(tmpdir, "fasta2hits.times.txt"), "a").write("%s\t%s\t%s\n"%(qid,len(qseq),dt))
+    with open(os.path.join(tmpdir, "fasta2hits.times.txt"), "a") as outtmp:
+        outtmp.write("%s\t%s\t%s\n"%(qid, len(qseqs), dt))
     return out
-        
+
+def get_sixframe_translations(r):
+    """Return list of six-frames translations"""
+    seqs = []
+    for seq in (r.seq, r.seq.reverse_complement()):
+        for i in range(3):
+            ilen = 3 * ((len(seq)-i) // 3)
+            seqs.append(str(seq[i:i+ilen].translate())) 
+    return seqs
+    
 def main():
+    #compatible with severs without argparse
     import argparse
     usage   = "%(prog)s -v"
-    parser  = argparse.ArgumentParser(usage=usage, description=desc, epilog=epilog)
-  
+    parser  = argparse.ArgumentParser(usage=usage, description=desc, epilog=epilog, \
+                                      formatter_class=argparse.RawTextHelpFormatter)
+
+    seqformats = ['fasta', 'fastq', 'gb', 'genbank', 'embl']
     parser.add_argument("-v", dest="verbose",  default=False, action="store_true", help="verbose")    
-    parser.add_argument('--version', action='version', version='1.0')   
+    parser.add_argument('--version', action='version', version='%(prog)s 1.1')   
     parser.add_argument("-i", "--input",     type=file, default=sys.stdin, 
-                        help="fasta file(s)   [stdin]")
+                        help="fasta stream    [stdin]")
+    parser.add_argument("--seqformat",       default="auto", choices = seqformats,
+                        help="input format    [%(default)s]")
+    parser.add_argument("-X", "--rapsiX",    default=False, action="store_true", 
+                        help="6-frames translation of nucleotide query")
     parser.add_argument("-o", "--output",    default=sys.stdout, type=argparse.FileType('w'), 
                         help="output stream   [stdout]")
     parser.add_argument("--html",            default=False, action="store_true", 
                         help="return HTML     [txt]")
     parser.add_argument("--link",            default="", 
                         help="add html link matches [%(default)s]")
+    parser.add_argument("-l", "--limit",     default=0, type=int,
+                        help="stop after      [all]")
     similo = parser.add_argument_group('Similarity search options')
     similo.add_argument("-k", "--kmer",      default=5, type=int, 
                         help="hash length     [%(default)s]")
@@ -274,7 +310,9 @@ def main():
                         help="protids are INT [STRING]") 
                          
     o = parser.parse_args()
-
+    if o.verbose:
+        sys.stderr.write("Options: %s\n"%str(o))
+        
     if os.path.isfile(o.db):
         cnx = sqlite3.connect(o.db)
         cur = cnx.cursor()
@@ -284,8 +322,36 @@ def main():
         cnx = MySQLdb.connect(db=o.db, host=o.host, user=o.user, passwd=o.pswd)
         cur = cnx.cursor()
 
-    for r in SeqIO.parse(o.input, 'fasta'):
-        out = fasta2hits(cur, o.db, o.table, o.seqcmd, r.description, str(r.seq), o.blatpath, \
+    #handle gz
+    handle = o.input
+    seqformatpos = -1
+    if handle.name.endswith('.gz'):
+        seqformatpos = -2
+        handle = gzip.open(handle.name)
+        
+    #get seqformat
+    seqformat = o.seqformat
+    if seqformat == "auto":
+        #assume fasta on stdin
+        if   handle == sys.stdin or handle.name.split('.')[seqformatpos]=='.fa':
+            seqformat = "fasta"
+        elif handle.name.split('.')[seqformatpos]=='.fq':
+            seqformat = "fastq"
+        elif handle.name.split('.')[seqformatpos] in seqformats:
+            seqformat = handle.name.split('.')[seqformatpos]
+        else:
+            sys.exit("Cannot guess input sequence format: %s\n"%handle.name)
+    
+    #process entries        
+    for i, r in enumerate(SeqIO.parse(handle, seqformat), 1):
+        if o.limit and i>o.limit:
+            break
+        #get 6-frames translations
+        if o.rapsiX:
+            seqs = get_sixframe_translations(r)
+        else:
+            seqs = str(r.seq)
+        out = fasta2hits(cur, o.db, o.table, o.seqcmd, r.id, seqs, o.blatpath, \
                          o.tmpdir, o.kmer, o.step, o.seqlimit, o.html, o.link, \
                          o.sampling, o.intprotids, o.verbose)
         o.output.write(out)
@@ -296,5 +362,7 @@ if __name__=='__main__':
         main()
     except KeyboardInterrupt:
         sys.stderr.write("\nCtrl-C pressed!      \n")
+    except IOError as e:
+        sys.stderr.write("\nI/O error({0}): {1}\n".format(e.errno, e.strerror))
     dt  = datetime.now()-t0
     sys.stderr.write("#Time elapsed: %s\n" % dt)
