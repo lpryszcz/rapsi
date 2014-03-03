@@ -49,9 +49,13 @@ def sqlite2seq(cur, db, protids):
     ON o.file_number=f.file_number WHERE key IN (%s)""" % ",".join(str(p) for p in protids)
     cur.execute(cmd)
     targets = []
-    for name, offset, length in cur.fetchall():
-        files[name].seek(offset)
-        targets.append(files[name].read(length))
+    for name, offset, length in sorted(cur.fetchall()):
+        try:
+            files[name].seek(offset)
+            targets.append(files[name].read(length))
+        except:
+            #bgzip sometimes doesn't work at first seek
+            sys.stderr.write("[Warning] Cannot fetch sequence for %s at %s + %s bytes\n"%(name, offset, length))
     return "".join(targets)
 
 def mysql2seq(cur, protids, seqcmd, intprotids):
@@ -195,7 +199,7 @@ def get_ranges(starts, sizes, offset=1):
         ranges.append(coords)
     return " ".join(ranges)
     
-def algs2formatted_output(algs, html, verbose):
+def algs2formatted_output(algs, ifrac, ofrac, html, verbose):
     """Return TXT or HTML formatted output for matched sequences"""
     #get output
     blastTable = htmlTable()
@@ -212,7 +216,7 @@ def algs2formatted_output(algs, html, verbose):
     bident, boverlp = algs[0][1], algs[0][2]
     row_i = 0
     for hit in algs:
-        if hit[1]<0.3*bident or hit[2]<0.3*boverlp:
+        if hit[1]<ifrac*bident or hit[2]<ofrac*boverlp:
             continue
         row_i += 1
         for item in hit:
@@ -227,7 +231,7 @@ def algs2formatted_output(algs, html, verbose):
         return blastTable.asTXT()
 
 def fasta2hits(cur, db, table, seqcmd, qid, qseqs, blatpath, tmpdir, kmer, step, \
-               seqlimit, html, link, sampling, intprotids, verbose):
+               seqlimit, html, link, sampling, intprotids, verbose, ifrac=0.3, ofrac=0.3):
     """Report hits to qseq from hash table and sequences.
     Deals with both, single seq and list of translated sequences.
     """
@@ -249,7 +253,7 @@ def fasta2hits(cur, db, table, seqcmd, qid, qseqs, blatpath, tmpdir, kmer, step,
         return "#Your query %s didn't produce any valid hit.\n"%qid
     
     #return formatted output
-    out  = algs2formatted_output(algs, html, verbose)
+    out  = algs2formatted_output(algs, ifrac, ofrac, html, verbose)
     #write run stats
     dt = time.time() - t0
     with open(os.path.join(tmpdir, "fasta2hits.times.txt"), "a") as outtmp:
@@ -335,9 +339,9 @@ def main():
     #handle gz
     handle = o.input
     seqformatpos = -1
-    if handle.name.endswith('.gz'):
+    '''if handle.name.endswith('.gz'):
         seqformatpos = -2
-        handle = gzip.open(handle.name)
+        handle = gzip.open(handle.name)'''
         
     #get seqformat
     seqformat = o.seqformat
@@ -354,13 +358,15 @@ def main():
     
     #process entries        
     for i, r in enumerate(SeqIO.parse(handle, seqformat), 1):
+        if not i%1000:
+            sys.stderr.write(" %s \r"%i)
         if o.limit and i>o.limit:
             break
         #get 6-frames translations
         if o.rapsiX:
             seqs = get_sixframe_translations(r)
         else:
-            seqs = str(r.seq)
+            seqs = [str(r.seq),]
         out = fasta2hits(cur, o.db, o.table, o.seqcmd, r.id, seqs, o.blatpath, \
                          o.tmpdir, o.kmer, o.step, o.seqlimit, o.html, o.link, \
                          o.sampling, o.intprotids, o.verbose)

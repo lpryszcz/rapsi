@@ -75,18 +75,11 @@ def seq2mers(seq, kmer, step, aminoset=set(aminos)):
             continue
         mers.add(mer)
     return mers
-        
-def insert_offset_data(cur, i, fi, psbyte, pebyte, headerlen):
-    """Insert record offset info into table."""
-    #with previous start and previous end - length of current header
-    ebyte = pebyte - headerlen
-    cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",(i, fi, psbyte, ebyte-psbyte))
-    #store ebyte
-    return ebyte
     
 def fasta_parser(fastas, cur, verbose):
     """Fasta iterator returning i, seqid as base64 and sequence str.
     Index sequence using proprietrary parser.
+    Handle bgzip compressed files.
     """
     if verbose:
         sys.stderr.write("Indexing and hashing sequences...\n")
@@ -100,18 +93,17 @@ def fasta_parser(fastas, cur, verbose):
             handle = bgzf.open(fn)
         else:
             handle = open(fn)
-        psbyte = pebyte = 0
+        psbyte = pelen = 0
         for i, r in enumerate(SeqIO.parse(handle, 'fasta'), i+1):
             #if i>10000: break
-            sbyte = handle.tell()
-            #store previous entry
-            if pebyte:
-                psbyte = insert_offset_data(cur, i-1, fi, psbyte, pebyte, len(r.description)+2)
-            pebyte = handle.tell()
+            if pelen:
+                cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",(i-1, fi, psbyte, pelen))
+                psbyte = phandle - len(r.description) - 2
+            phandle = handle.tell()
+            pelen = len(r.format('fasta'))
             yield i, i, str(r.seq) #b62encode(i)
-        #store last entry
-        if pebyte:
-            insert_offset_data(cur, i, fi, psbyte, pebyte, 0)
+        if pelen:
+            cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",(i, fi, psbyte, pelen))
     #fill metadata
     cur.executemany("INSERT INTO meta_data VALUES (?, ?)",(('count', i),('format','fasta')))
     cur.connection.commit()
