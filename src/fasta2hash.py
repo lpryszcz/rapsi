@@ -15,7 +15,7 @@ import getpass, resource, subprocess
 import array, MySQLdb, MySQLdb.cursors
 import sqlite3, tempfile
 from datetime import datetime
-from Bio import SeqIO
+from Bio import SeqIO, bgzf
 from Bio.Alphabet import generic_protein
 
 def adapt_tuple(xlist):
@@ -96,7 +96,10 @@ def fasta_parser(fastas, cur, verbose):
         #add file to db
         cur.execute("INSERT INTO file_data VALUES (?, ?)",(fi, fn))
         #get handle and start byte
-        handle = open(fn)
+        if fn.endswith('.gz'):
+            handle = bgzf.open(fn)
+        else:
+            handle = open(fn)
         psbyte = pebyte = 0
         for i, r in enumerate(SeqIO.parse(handle, 'fasta'), i+1):
             #if i>10000: break
@@ -265,10 +268,10 @@ def dbConnect_sqlite(db, table, kmer, verbose, replace):
     #prepare tables and indices
     cur.execute("CREATE TABLE meta_data (key TEXT, value TEXT)")
     cur.execute("CREATE TABLE file_data (file_number INTEGER, name TEXT)")
-    cur.execute("CREATE TABLE offset_data (key INTEGER, file_number INTEGER, offset INTEGER, length INTEGER)")
-    cur.execute("CREATE UNIQUE INDEX key_index ON offset_data(key)")
-    cur.execute("CREATE TABLE %s (hash CHAR(%s), protids BLOB)" % (table, kmer))
-    cur.execute("CREATE INDEX idx_hash ON %s (hash)"%table)
+    cur.execute("CREATE TABLE offset_data (key INTEGER PRIMARY KEY, file_number INTEGER, offset INTEGER, length INTEGER)")
+    #cur.execute("CREATE UNIQUE INDEX key_index ON offset_data(key)")
+    cur.execute("CREATE TABLE %s (hash CHAR(%s) PRIMARY KEY, protids BLOB)" % (table, kmer))
+    #cur.execute("CREATE INDEX idx_hash ON %s (hash)"%table)
     return cur  
             
 def main():

@@ -22,13 +22,13 @@ v1.1:
 - implemented nucleotide query (rapsiX)
 - FastQ, genbank, embl support
 - auto query format recognition
-
+- BGZIP support
 """
 
 import commands, gzip, os, sys, time, zlib
 import MySQLdb, resource, sqlite3
 from datetime import datetime
-from Bio import SeqIO
+from Bio import SeqIO, bgzf
 from htmlTable import htmlTable
 from fasta2hash import seq2mers, b62decode
         
@@ -36,7 +36,14 @@ def sqlite2seq(cur, db, protids):
     """Return target fastas for protids from sqlite3."""
     #open target files
     cur.execute("SELECT name FROM file_data")
-    files = {name: open(os.path.join(os.path.dirname(db), name)) for name, in cur.fetchall()}
+    files = {} #name: open(os.path.join(os.path.dirname(db), name)) for name, in cur.fetchall()}
+    for name, in cur.fetchall():
+        fpath = os.path.join(os.path.dirname(db), name)
+        if name.endswith('.gz'):
+            files[name] = bgzf.open(fpath)
+        else:
+            files[name] =      open(fpath)
+
     #get targets
     cmd = """SELECT f.name, offset, length FROM offset_data o JOIN file_data f
     ON o.file_number=f.file_number WHERE key IN (%s)""" % ",".join(str(p) for p in protids)
@@ -171,7 +178,10 @@ def hits2algs(qname, qseqs, matches, blatpath, tmpdir, link, verbose):
         algs.append((tlink, round(identity, 1), round(overlap, 1), int(score), \
                      mismatches, Tgaps, alglen, qranges, tranges))
     #clean-up
-    os.unlink(tmpq); os.unlink(tmpt); os.unlink(tmpr)
+    if "Error:" not in blatout:
+        os.unlink(tmpq)
+        os.unlink(tmpt)
+        os.unlink(tmpr)
     return sorted(algs, key=lambda x: float(x[3]), reverse=True)
 
 def get_ranges(starts, sizes, offset=1):
@@ -333,9 +343,9 @@ def main():
     seqformat = o.seqformat
     if seqformat == "auto":
         #assume fasta on stdin
-        if   handle == sys.stdin or handle.name.split('.')[seqformatpos]=='.fa':
+        if   handle == sys.stdin or handle.name.split('.')[seqformatpos]=='fa':
             seqformat = "fasta"
-        elif handle.name.split('.')[seqformatpos]=='.fq':
+        elif handle.name.split('.')[seqformatpos]=='fq':
             seqformat = "fastq"
         elif handle.name.split('.')[seqformatpos] in seqformats:
             seqformat = handle.name.split('.')[seqformatpos]
