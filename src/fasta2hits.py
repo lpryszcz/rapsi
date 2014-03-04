@@ -30,7 +30,7 @@ import MySQLdb, resource, sqlite3
 from datetime import datetime
 from Bio import SeqIO, bgzf
 from htmlTable import htmlTable
-from fasta2hash import seq2mers
+from fasta2hash import dnaseq2mers, aaseq2mers
         
 def sqlite2seq(cur, db, protids):
     """Return target fastas for protids from sqlite3."""

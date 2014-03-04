@@ -45,6 +45,26 @@ def seq2mers(seq, kmer, step, aminoset=set(aminos)):
             continue
         mers.add(mer)
     return mers
+
+def get_seq_offset_length(handle):
+    """Return entry start offset and sequence. BGZIP compatible.
+    #http://biopython.org/DIST/docs/api/Bio.File-pysrc.html#_SQLiteManySeqFilesDict.__init__
+    """
+    soffset = eoffset = handle.tell()
+    seq = []
+    for line in handle:
+        if line.startswith(">"):
+            if seq:
+                yield "".join(seq), soffset, length
+            seq = []
+            length = len(line)
+            soffset = eoffset
+        else:
+            seq.append(line.strip())
+            length += len(line)
+            eoffset = handle.tell()
+    if seq:
+        yield "".join(seq), soffset, length
     
 def fasta_parser(fastas, cur, verbose):
     """Fasta iterator returning i, seqid as base64 and sequence str.
@@ -64,18 +84,14 @@ def fasta_parser(fastas, cur, verbose):
         else:
             handle = open(fn)
         #parse entries
-        poffset = offset = 0
-        for i, r in enumerate(SeqIO.parse(handle, 'fasta'), i+1):
-            #get entry length
-            elen   = len(r.format('fasta'))
-            if poffset:
-                offset = poffset - len(r.description) - 2
+        for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
             #store entry offset
-            cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",(i, fi, offset, elen))
-            poffset = handle.tell()
-            yield i, i, str(r.seq)
+            cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",\
+                        (i, fi, offset, elen))
+            yield i, i, seq
     #fill metadata
-    cur.executemany("INSERT INTO meta_data VALUES (?, ?)",(('count', i),('format','fasta')))
+    cur.executemany("INSERT INTO meta_data VALUES (?, ?)",\
+                    (('count', i),('format','fasta')))
     cur.connection.commit()
 
 def db_seq_parser(cur, cmd, verbose):
@@ -89,8 +105,15 @@ def db_seq_parser(cur, cmd, verbose):
         
 def hash_sequences(parser, kmer, step, seqlimit, alphabet, verbose, keylen = 2):
     """Parse input fasta and generate hash table."""
-    #open tempfile for each two first aminos
+    #get alphabet
+    if dna:
+        alphabet = nucleotides
+        seq2mers = dnaseq2mears
+    else:
+        alphabet = aminos
+        seq2mers = aaseq2mears
     alphabetset = set(alphabet)
+    #open tempfile for each two first aminos
     files = {int2mer(i, alphabet, keylen): tempfile.TemporaryFile(dir=os.path.curdir) for i in xrange(len(alphabet)**keylen)}
     #hash sequences
     i = 0
@@ -122,7 +145,6 @@ def parse_tempfiles(files, seqlimit):
     
 def upload(files, db, host, user, pswd, table, kmer, seqlimit, verbose):        
     """Load to database"""
-    #store to database
     if verbose:
         sys.stderr.write("Uploading to database...\n")
     rows = discarded = 0
@@ -226,6 +248,8 @@ def main():
                         help="hash steps      [%(default)s]")
     parser.add_argument("--seqlimit",         default=2000, type=int, 
                         help="ignore too common kmers [%(default)s]")
+    parser.add_argument("--dna",             default=False, action='store_true',
+                        help="DNA alphabet    [amino acids]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
                         help="database        [%(default)s]")
@@ -244,7 +268,7 @@ def main():
     o = parser.parse_args()
     if o.verbose:
         sys.stderr.write("Options: %s\n"%str(o))
-        
+
     #get sequence parser
     if o.input:
         #prepare database
@@ -252,7 +276,7 @@ def main():
         #get parser
         parser    = fasta_parser(o.input, cur, o.verbose)
         #hash seqs
-        files     = hash_sequences(parser, o.kmer, o.step, o.seqlimit, aminos, o.verbose)
+        files     = hash_sequences(parser, o.kmer, o.step, o.seqlimit, o.dna, o.verbose)
         #upload
         discarded = upload_sqlite(files, cur, o.table, o.seqlimit, o.verbose)
     else:
@@ -265,7 +289,7 @@ def main():
         #get parser
         parser    = db_seq_parser(cur, o.cmd, o.verbose)
         #hash seqs
-        files     = hash_sequences(parser, o.kmer, o.step, o.seqlimit, aminos, o.verbose)
+        files     = hash_sequences(parser, o.kmer, o.step, o.seqlimit, o.dna, o.verbose)
         #upload
         discarded = upload(files, o.db, o.host, o.user, pswd, o.table, o.kmer, o.seqlimit, o.verbose)
     
