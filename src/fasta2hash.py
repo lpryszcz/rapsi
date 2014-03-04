@@ -1,50 +1,20 @@
 #!/usr/bin/env python
 desc="""Generate hash table and load it to db.
-Note, you will need ~16GB RAM to hash 13M proteins with kmer=5 & step=1.
-MySQLdb connect using SSCursor (server side cursor), as default takes a lot
-of RAM. Isn't that slower??
 """
 epilog="""Author:
 l.p.pryszcz@gmail.com
 
-Barcelona, 13/11/2013
+Barcelona/Mizerow, 13/11/2013
 """
 
 import os, sys, time, zlib
-import getpass, resource, subprocess
-import array, MySQLdb, MySQLdb.cursors
-import sqlite3, tempfile
+import getpass, resource
+import MySQLdb, MySQLdb.cursors, sqlite3, tempfile
 from datetime import datetime
 from Bio import SeqIO, bgzf
-from Bio.Alphabet import generic_protein
 
-def adapt_tuple(xlist):
-    return array.array('I', [int(x) for x in xlist]).tostring()
-    
-sqlite3.register_adapter(tuple, adapt_tuple)
-sqlite3.register_converter("tuple", array.array.tolist)
-
-aminos   = 'ACDEFGHIKLMNPQRSTVWY'
-aminoset = set(aminos)
-
-ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-
-def b62encode(n, alphabet=ALPHABET):
-    """Converts a positive integer to a base62 string."""
-    if not n:
-        return alphabet[0]
-    base62 = ""
-    while n != 0:
-        n, i = divmod(n, len(alphabet))
-        base62 = alphabet[i] + base62
-    return base62#.zfill(leng)
-
-def b62decode(base62, alphabet=ALPHABET):
-    """Convert base62 str to int."""
-    n = 0
-    for i, char in enumerate(base62, 1):
-        n += alphabet.index(char) * (len(alphabet) ** (len(base62) - i))
-    return n  
+aminos = 'ACDEFGHIKLMNPQRSTVWY'
+nucleotides = 'ACGT'
 
 def memory_usage():
     """Return memory usage in MB"""
@@ -93,17 +63,17 @@ def fasta_parser(fastas, cur, verbose):
             handle = bgzf.open(fn)
         else:
             handle = open(fn)
-        psbyte = pelen = 0
+        #parse entries
+        poffset = offset = 0
         for i, r in enumerate(SeqIO.parse(handle, 'fasta'), i+1):
-            #if i>10000: break
-            if pelen:
-                cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",(i-1, fi, psbyte, pelen))
-                psbyte = phandle - len(r.description) - 2
-            phandle = handle.tell()
-            pelen = len(r.format('fasta'))
-            yield i, i, str(r.seq) #b62encode(i)
-        if pelen:
-            cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",(i, fi, psbyte, pelen))
+            #get entry length
+            elen   = len(r.format('fasta'))
+            if poffset:
+                offset = poffset - len(r.description) - 2
+            #store entry offset
+            cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",(i, fi, offset, elen))
+            poffset = handle.tell()
+            yield i, i, str(r.seq)
     #fill metadata
     cur.executemany("INSERT INTO meta_data VALUES (?, ?)",(('count', i),('format','fasta')))
     cur.connection.commit()
@@ -117,17 +87,17 @@ def db_seq_parser(cur, cmd, verbose):
     for i, (seqid, seq) in enumerate(cur, 1):
         yield i, seqid, seq
         
-def hash_sequences(parser, kmer, step, seqlimit, verbose):
+def hash_sequences(parser, kmer, step, seqlimit, alphabet, verbose, keylen = 2):
     """Parse input fasta and generate hash table."""
     #open tempfile for each two first aminos
-    keylen = 2
-    files = {int2mer(i, aminos, keylen): tempfile.TemporaryFile(dir=os.path.curdir) for i in xrange(len(aminos)**keylen)}
+    alphabetset = set(alphabet)
+    files = {int2mer(i, alphabet, keylen): tempfile.TemporaryFile(dir=os.path.curdir) for i in xrange(len(alphabet)**keylen)}
     #hash sequences
     i = 0
     for i, seqid, seq in parser:
         if verbose and not i%10e2:
             sys.stderr.write(" %s\r" % i)
-        for mer in seq2mers(seq, kmer, step, aminoset):
+        for mer in seq2mers(seq, kmer, step, alphabetset):
             files[mer[:keylen]].write("%s\t%s\n"%(mer, seqid))
     sys.stderr.write(" %s\n" % i)
     return files
@@ -155,31 +125,16 @@ def upload(files, db, host, user, pswd, table, kmer, seqlimit, verbose):
     #store to database
     if verbose:
         sys.stderr.write("Uploading to database...\n")
-    rows = 0
-    #fn = "%s.load.%s.txt" % (db, time.time())
-    #out = open(fn, "w")
-    discarded = 0
+    rows = discarded = 0
     cnx = MySQLdb.connect(db=db, host=host, user=user, passwd=pswd, local_infile = 1)
     cur = cnx.cursor()
     for mer, protids in parse_tempfiles(files, seqlimit):
         if not protids:
             discarded += 1
             continue
-        #out.write("%s\t%s\n"%(mer, " ".join(protids)))
         rows += 1
         cur.execute("INSERT INTO `"+table+"` VALUES (%s, %s)",\
                     (mer, buffer(zlib.compress(" ".join(protids)))))        
-    '''#close output before uploading!
-    out.close()
-    #connect & load data
-    cnx = MySQLdb.connect(db=db, host=host, user=user, passwd=pswd, local_infile = 1)
-    cur = cnx.cursor()
-    cmd = "LOAD DATA LOCAL INFILE '%s' INTO TABLE %s"%(fn, table)
-    if verbose:
-        sys.stderr.write(" %s\n"%cmd)
-    cur.execute(cmd)
-    #compress table and add index
-    #cmd = "myisampack -s %s"'''
     if verbose:
         sys.stderr.write(" %s rows uploaded!\n"%rows)
     cmd = "ALTER TABLE `%s` ADD KEY `idx_hash` (`hash`)" % table
@@ -208,7 +163,6 @@ def dbConnect(db, host, user, pswd, table, kmer, verbose, replace):
         else:
             sys.exit('Table %s already exists!'%table)
     #create table #index added after compression 
-    #cmd = 'CREATE TABLE `%s` (`hash` CHAR(%s), `protids` MEDIUMTEXT, KEY `idx_hash` (`hash`)) ENGINE=MyISAM' % (table, kmer)
     cmd = 'CREATE TABLE `%s` (`hash` CHAR(%s), `protids` BLOB) ENGINE=MyISAM' % (table, kmer)
     if verbose:
         sys.stderr.write(" %s\n"%cmd)
@@ -219,24 +173,15 @@ def upload_sqlite(files, cur, table, seqlimit, verbose):
     """Load data from tmpfiles into sqlite3."""
     if verbose:
         sys.stderr.write("Loading into database...\n")
-    '''#subprocess for inserting
-    args = ["sqlite3", db, ".import /dev/stdin %s"%table]
-    if verbose:
-        sys.stderr.write(" %s\n" % " ".join(args))
-    proc = subprocess.Popen(args, stdin=subprocess.PIPE)
-    out  = proc.stdin #'''
     #upload
     discarded = 0
     for mer, protids in parse_tempfiles(files, seqlimit):
         if not protids:
             discarded += 1
             continue 
-        #out.write('%s|%s\n' % (mer, " ".join(protids))) '''
-        #a = array.array('B', [int(x) for x in protids])
-        #cur.execute("INSERT INTO %s VALUES (?,?)"%table,(mer, tuple(protids)))
         cur.execute("INSERT INTO %s VALUES (?,?)"%table,\
                     (mer, buffer(zlib.compress(" ".join(protids)))))
-    cur.connection.commit()#'''
+    cur.connection.commit()
     return discarded
     
 def dbConnect_sqlite(db, table, kmer, verbose, replace):
@@ -261,9 +206,7 @@ def dbConnect_sqlite(db, table, kmer, verbose, replace):
     cur.execute("CREATE TABLE meta_data (key TEXT, value TEXT)")
     cur.execute("CREATE TABLE file_data (file_number INTEGER, name TEXT)")
     cur.execute("CREATE TABLE offset_data (key INTEGER PRIMARY KEY, file_number INTEGER, offset INTEGER, length INTEGER)")
-    #cur.execute("CREATE UNIQUE INDEX key_index ON offset_data(key)")
     cur.execute("CREATE TABLE %s (hash CHAR(%s) PRIMARY KEY, protids BLOB)" % (table, kmer))
-    #cur.execute("CREATE INDEX idx_hash ON %s (hash)"%table)
     return cur  
             
 def main():
@@ -299,7 +242,9 @@ def main():
                         help="cmd to get protid, seq from db [%(default)s]")
                         
     o = parser.parse_args()
-
+    if o.verbose:
+        sys.stderr.write("Options: %s\n"%str(o))
+        
     #get sequence parser
     if o.input:
         #prepare database
@@ -307,7 +252,7 @@ def main():
         #get parser
         parser    = fasta_parser(o.input, cur, o.verbose)
         #hash seqs
-        files     = hash_sequences(parser, o.kmer, o.step, o.seqlimit, o.verbose)
+        files     = hash_sequences(parser, o.kmer, o.step, o.seqlimit, aminos, o.verbose)
         #upload
         discarded = upload_sqlite(files, cur, o.table, o.seqlimit, o.verbose)
     else:
@@ -320,7 +265,7 @@ def main():
         #get parser
         parser    = db_seq_parser(cur, o.cmd, o.verbose)
         #hash seqs
-        files     = hash_sequences(parser, o.kmer, o.step, o.seqlimit, o.verbose)
+        files     = hash_sequences(parser, o.kmer, o.step, o.seqlimit, aminos, o.verbose)
         #upload
         discarded = upload(files, o.db, o.host, o.user, pswd, o.table, o.kmer, o.seqlimit, o.verbose)
     

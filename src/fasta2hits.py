@@ -30,7 +30,7 @@ import MySQLdb, resource, sqlite3
 from datetime import datetime
 from Bio import SeqIO, bgzf
 from htmlTable import htmlTable
-from fasta2hash import seq2mers, b62decode
+from fasta2hash import seq2mers
         
 def sqlite2seq(cur, db, protids):
     """Return target fastas for protids from sqlite3."""
@@ -90,8 +90,7 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
         if not seqcmd:
             merprotids = zlib.decompress(merprotids)
         for protid in merprotids.split():
-            #decode b62 int only for sqlite3
-            #if not seqcmd: protid = b62decode(protid)
+            #add hits
             if protid not in protids:
                 protids[protid]  = 1
             else:
