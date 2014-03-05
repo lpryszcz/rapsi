@@ -75,33 +75,38 @@ def get_matches_sam(samstream, verbose):
         yield pread, hits
     
 def get_matches_blast8(input, verbose):
-    """Return matches from blast8 output ie rapsi.out
-#ID     % identity      % overlap       Score   Mis-matches     Gaps    Alg. length     Q. ranges       T. ranges
-gi|255726050|ref|XP_002547951.1|        100.0   2.4     32      0       0       16      1-16    585-600
-gi|290988839|ref|XP_002677098.1|        100.0   2.5     20      0       0       10      3-12    372-381
-    """
-    pscore = 0
+    """Return matches from blast8 or rapsi output."""
+    pscore = q = pq = 0
     hits   = []    
     for line in input:
-        if line.startswith("#"):
+        if line.startswith("#") or q!=pq:
             #report previous hits
             if hits:
-                yield "None", hits
+                yield pq, hits
                 hits = []
                 pscore = 0
+            pq = q
             continue
-        ref, ident, overlap, score, mmatches, gaps, alen, qranges, tranges = line[:-1].split('\t')
-        if int(score) < pscore:
+        ldata = line[:-1].split('\t')
+        #blast
+        if len(ldata)==12:
+            q, ref, ident, m, matches, gaps, qs, qe, ts, te, e, score = ldata
+            start, end = int(ts), int(te)
+            if ts>te:
+                start, end = end, start
+        #rapsi
+        else:
+            q, ref, ident, overlap, score, mmatches, gaps, alen, qranges, tranges = ldata
+            start = int(tranges.split()[0].split('-')[0])
+            end   = int(tranges.split()[-1].split('-')[1])
+        if float(score) < pscore:
             continue
-        start = int(tranges.split()[0].split('-')[0])
-        end   = int(tranges.split()[-1].split('-')[1])
         #get gi int
         if ref.startswith("gi|"):
             ref = int(ref.split("|")[1])
         #store match
         hits.append((ref, start, end))
-        pscore = int(score)
-        
+        pscore = float(score)
     if hits:
         yield "None", hits
      
@@ -184,15 +189,14 @@ def hits2taxa(input, out, db, verbose, limit=0):
         if not taxid: 
             continue
         k += 1
-        #get genes at the very end!
         if taxid not in taxid2reads:
-            taxid2reads[taxid]   = 0 #[]
-            #taxid2matches[taxid] = 0#[]
+            taxid2reads[taxid] = 0 
         #store read name & genes
-        taxid2reads[taxid] += 1#.append(rname)
-        #taxid2matches[taxid] += 1#matches
+        taxid2reads[taxid] += 1
 
     #report
+    if not taxid2reads:
+        sys.exit("No matches found!")
     ##foreign reads
     freads = sum(reads for taxid, reads in taxid2reads.iteritems())
     header = "#name\ttaxid\treads\t%\n"

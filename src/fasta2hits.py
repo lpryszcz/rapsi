@@ -379,7 +379,7 @@ def main():
     
     #process entries        
     for i, r in enumerate(SeqIO.parse(handle, seqformat), 1):
-        if not i%1000:
+        if not i%100:
             sys.stderr.write(" %s \r"%i)
         if o.limit and i>o.limit:
             break

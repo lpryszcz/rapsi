@@ -1,5 +1,13 @@
 #!/usr/bin/env python
-desc="""Parse NCBI taxdump and report taxa.gz
+desc="""Parse NCBI taxdump and report taxonomy table.
+
+###
+#Recommended usage (~20m):
+sqlite3 taxonomy.db3 "create table taxa_info (taxid INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT, rank TEXT)"
+src/ncbitaxonomy2taxa.py -v | sqlite3 -separator $'\\t' taxonomy.db3 '.import /dev/stdin taxa_info' 
+sqlite3 taxonomy.db3 "create table gi2taxid  (gi INTEGER PRIMARY KEY, taxid INTEGER)"
+wget -O- ftp://ftp.ncbi.nih.gov/pub/taxonomy/gi_taxid_????.dmp.gz | zcat | sqlite3 -separator $'\\t' taxonomy.db3 '.import /dev/stdin gi2taxid'
+###
 """
 epilog="""Author:
 l.p.pryszcz@gmail.com
@@ -49,7 +57,8 @@ def ncbitaxonomy2taxa(taxdump, out, verbose):
 
 def main():
     usage  = "src/%(prog)s -v"
-    parser = argparse.ArgumentParser(usage=usage, description=desc, epilog=epilog)
+    parser = argparse.ArgumentParser(usage=usage, description=desc, epilog=epilog, \
+                                     formatter_class=argparse.RawTextHelpFormatter)
   
     parser.add_argument("-v", dest="verbose", default=False, action="store_true", help="verbose")    
     parser.add_argument('--version', action='version', version='1.0')   
