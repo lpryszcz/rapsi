@@ -30,15 +30,26 @@ class htmlTable:
         self.cell_classes= {}
 
     def add_cell(self, row_index, content, classname=None):
-        """ Add the given object (any text or HTML code) as the content of
+        """Add the given object (any text or HTML code) as the content of
         a cell in the row specified by the "row_index" argument. Cells
         are arranged in a stack-like way. """
         # Creates the grid until fitting the given index
         while len(self.rows)<=row_index:
             self.rows.append([])
         self.rows[row_index].append(str(content))
-        if classname is not None: 
-            self.cell_classes[row_index][len(self.rows[row_index]-1)] = classname
+        #if classname is not None: 
+        #    self.cell_classes[row_index][len(self.rows[row_index]-1)] = classname
+            
+    def remove_column(self, column_index):
+        """Remove column from table"""
+        for row_index, row in enumerate(self.rows):
+            if len(row)<=column_index:
+                continue
+            #remove column content
+            row.pop(column_index)
+            rows[row_index] = row
+            #drop formatting classes
+            #if self.cell_classes[row_index]:
 
     def asHTML(self):
         """Returns the HTML representation of the table object."""

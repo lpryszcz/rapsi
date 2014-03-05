@@ -18,6 +18,8 @@ TO ADD:
 
 
 CHANGELOG:
+v1.2:
+- DNA support
 v1.1:
 - implemented nucleotide query (rapsiX)
 - FastQ, genbank, embl support
@@ -26,7 +28,7 @@ v1.1:
 """
 
 import commands, gzip, os, sys, time, zlib
-import MySQLdb, resource, sqlite3
+import MySQLdb, resource, sqlite3, tempfile
 from datetime import datetime
 from Bio import SeqIO, bgzf
 from htmlTable import htmlTable
@@ -68,7 +70,7 @@ def mysql2seq(cur, protids, seqcmd, intprotids):
     return [">%s\n%s\n" % tup for tup in cur.fetchall()]
     
 def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampling, \
-                intprotids, verbose):
+                intprotids, seq2mers, verbose):
     """Return matching protids and sequences"""
     if verbose:
         sys.stderr.write("Parsing %s aminos from: %s...\n" % (len("".join(qseqs)), qid))
@@ -124,7 +126,7 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
         targets = sqlite2seq(cur, db, fprotids)
     return targets
     
-def hits2algs(qname, qseqs, matches, blatpath, tmpdir, link, verbose):
+def hits2algs(qname, qseqs, matches, blatpath, tmpdir, link, dna, verbose):
     """Align query with hits and return global algs."""
     if verbose:
         sys.stderr.write(" Aligning...\n")    
@@ -134,15 +136,21 @@ def hits2algs(qname, qseqs, matches, blatpath, tmpdir, link, verbose):
     #write query
     tmpq = "%s.query" % tmpfn
     with open(tmpq, "w") as tmpqf:
-        for i, qseq in enumerate(qseqs, 1):
-            tmpqf.write(">%s.%s\n%s\n"%(qname, i, qseq))
+        if len(qseqs)>1:
+            for i, qseq in enumerate(qseqs, 1):
+                tmpqf.write(">%s.%s\n%s\n"%(qname, i, qseq))
+        else:
+            tmpqf.write(">%s\n%s\n"%(qname, qseqs[0]))
     #write targets
-    tmpt = "%s.target" % tmpfn
+    tmpt = "%s.target" % tmpfn#; os.mkfifo(tmpt)
     with open(tmpt, "w") as tmptf:
         tmptf.write("".join(matches))
     #run blat
     tmpr = "%s.out" % tmpfn
-    cmd  = "%s -prot -noHead %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
+    if dna:
+        cmd  = "%s -q=dna -t=dna -noHead %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
+    else:
+        cmd  = "%s -prot -noHead %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
     if verbose:
         sys.stderr.write("  %s\n"%cmd)
     blatout = commands.getoutput(cmd)
@@ -178,7 +186,7 @@ def hits2algs(qname, qseqs, matches, blatpath, tmpdir, link, verbose):
             tlink = link % tuple([t]*link.count('%s'))
         else:
             tlink = t
-        algs.append((tlink, round(identity, 1), round(overlap, 1), int(score), \
+        algs.append((q, tlink, round(identity, 1), round(overlap, 1), int(score), \
                      mismatches, Tgaps, alglen, qranges, tranges))
     #clean-up
     if "Error:" not in blatout:
@@ -198,7 +206,7 @@ def get_ranges(starts, sizes, offset=1):
         ranges.append(coords)
     return " ".join(ranges)
     
-def algs2formatted_output(algs, ifrac, ofrac, html, verbose):
+def algs2formatted_output(algs, ifrac, ofrac, html, verbose, no_query):
     """Return TXT or HTML formatted output for matched sequences"""
     #get output
     blastTable = htmlTable()
@@ -207,30 +215,31 @@ def algs2formatted_output(algs, ifrac, ofrac, html, verbose):
     '''headerNames = ["Hit ID", "% identity", "% overlap", "E-value", "Score", \
                    "Alg. length", "Mis-matches", "Gaps", "Q. start", "Q. end", \
                    "T. start", "T. end"] '''
-    headerNames = ["ID", "% identity", "% overlap", "Score", \
+    headerNames = ["Query", "Target", "% identity", "% overlap", "Score", \
                    "Mis-matches", "Gaps", "Alg. length", "Q. ranges", "T. ranges"]
     for name in headerNames: 
         blastTable.add_cell(0, name)
     #add results
-    bident, boverlp = algs[0][1], algs[0][2]
+    bident, boverlp = algs[0][2], algs[0][3]
     row_i = 0
     for hit in algs:
-        if hit[1]<ifrac*bident or hit[2]<ofrac*boverlp:
+        if hit[2]<ifrac*bident or hit[3]<ofrac*boverlp:
             continue
         row_i += 1
         for item in hit:
             blastTable.add_cell(row_i, item)
-    #print
-    #if verbose:
-    #    sys.stderr.write(blastTable.asTXT())
-    #return
+    #rm query column
+    if no_query:
+        blastTable.remove_column(0)
+    #return html or txt
     if html:
         return blastTable.asHTML()
     else:
         return blastTable.asTXT()
 
 def fasta2hits(cur, db, table, seqcmd, qid, qseqs, blatpath, tmpdir, kmer, step, \
-               seqlimit, html, link, sampling, intprotids, verbose, ifrac=0.3, ofrac=0.3):
+               seqlimit, html, link, sampling, intprotids, verbose, dna=False, \
+               ifrac=0.3, ofrac=0.3, no_query=True):
     """Report hits to qseq from hash table and sequences.
     Deals with both, single seq and list of translated sequences.
     """
@@ -238,21 +247,26 @@ def fasta2hits(cur, db, table, seqcmd, qid, qseqs, blatpath, tmpdir, kmer, step,
     #deal with single sequence
     if type(qseqs) is str:
         qseqs = (qseqs, )
+    #DNA or amino query
+    if dna:
+        seq2mers = dnaseq2mers
+    else:
+        seq2mers = aaseq2mers
     #get kmer matching sequences
     matches = seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, \
-                          sampling, intprotids, verbose)
+                          sampling, intprotids, seq2mers, verbose)
 
     if not matches:
         return "#Your query %s didn't produce any hit.\n"%qid
     
     #align with blat
-    algs = hits2algs(qid, qseqs, matches, blatpath, tmpdir, link, verbose)
+    algs = hits2algs(qid, qseqs, matches, blatpath, tmpdir, link, dna, verbose)
 
     if not algs:
         return "#Your query %s didn't produce any valid hit.\n"%qid
     
     #return formatted output
-    out  = algs2formatted_output(algs, ifrac, ofrac, html, verbose)
+    out  = algs2formatted_output(algs, ifrac, ofrac, html, verbose, no_query)
     #write run stats
     dt = time.time() - t0
     with open(os.path.join(tmpdir, "fasta2hits.times.txt"), "a") as outtmp:
@@ -284,10 +298,14 @@ def main():
                         help="input format    [%(default)s]")
     parser.add_argument("-X", "--rapsiX",    default=False, action="store_true", 
                         help="6-frames translation of nucleotide query")
+    parser.add_argument("--dna",             default=False, action='store_true',
+                        help="DNA alphabet    [amino acids]")
     parser.add_argument("-o", "--output",    default=sys.stdout, type=argparse.FileType('w'), 
                         help="output stream   [stdout]")
     parser.add_argument("--html",            default=False, action="store_true", 
                         help="return HTML     [txt]")
+    parser.add_argument("--no_query",        default=False, action="store_true", 
+                        help="no query in output")
     parser.add_argument("--link",            default="", 
                         help="add html link matches [%(default)s]")
     parser.add_argument("-l", "--limit",     default=0, type=int,
@@ -305,6 +323,10 @@ def main():
                         help="max. seqs to retrieve [%(default)s]")
     similo.add_argument("-n", "--sampling",   default=0, type=int,
                         help="sample n kmers from query [all]")
+    similo.add_argument("--ifrac",            default=0.3, type=float, 
+                        help="min. identity of best hit [%(default)s]")
+    similo.add_argument("--ofrac",            default=0.3, type=float, 
+                        help="min. overlap of best hit [%(default)s]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
                         help="database        [%(default)s]")
@@ -368,7 +390,8 @@ def main():
             seqs = [str(r.seq),]
         out = fasta2hits(cur, o.db, o.table, o.seqcmd, r.id, seqs, o.blatpath, \
                          o.tmpdir, o.kmer, o.step, o.seqlimit, o.html, o.link, \
-                         o.sampling, o.intprotids, o.verbose)
+                         o.sampling, o.intprotids, o.verbose, o.dna, o.ifrac, o.ofrac, \
+                         o.no_query)
         o.output.write(out)
         
 if __name__=='__main__': 

@@ -15,6 +15,7 @@ from Bio import SeqIO, bgzf
 
 aminos = 'ACDEFGHIKLMNPQRSTVWY'
 nucleotides = 'ACGT'
+DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
 
 def memory_usage():
     """Return memory usage in MB"""
@@ -34,8 +35,8 @@ def int2mer(meri, aminos, kmer):
     mer.reverse()
     return "".join(mer)
 
-def seq2mers(seq, kmer, step, aminoset=set(aminos)):
-    """Kmers generator for seq"""
+def aaseq2mers(seq, kmer, step, aminoset=set(aminos)):
+    """Kmers generator for amino seq"""
     mers = set()
     #skip first amino; usually M
     for s in xrange(1, len(seq)-kmer, step):
@@ -43,6 +44,23 @@ def seq2mers(seq, kmer, step, aminoset=set(aminos)):
         #skip mer containing non-standard aminos
         if not aminoset.issuperset(mer):
             continue
+        mers.add(mer)
+    return mers
+
+def reverse_complement(mer):
+    """Return DNA reverse complement"""
+    return "".join(DNAcomplement[b] for b in reversed(mer))
+    
+def dnaseq2mers(seq, kmer, step, nucleotideset=set(nucleotides)):
+    """Kmers generator for DNA seq"""
+    mers = set()
+    for s in xrange(0, len(seq)-kmer, step):
+        mer = seq[s:s+kmer]
+        if not nucleotideset.issuperset(mer):
+            continue
+        #store reverse complement
+        if mer > reverse_complement(mer):
+            mer = reverse_complement(mer)
         mers.add(mer)
     return mers
 
@@ -103,18 +121,21 @@ def db_seq_parser(cur, cmd, verbose):
     for i, (seqid, seq) in enumerate(cur, 1):
         yield i, seqid, seq
         
-def hash_sequences(parser, kmer, step, seqlimit, alphabet, verbose, keylen = 2):
+def hash_sequences(parser, kmer, step, seqlimit, dna, verbose):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
         alphabet = nucleotides
-        seq2mers = dnaseq2mears
+        seq2mers = dnaseq2mers
+        keylen   = 4
     else:
         alphabet = aminos
-        seq2mers = aaseq2mears
+        seq2mers = aaseq2mers
+        keylen   = 2
     alphabetset = set(alphabet)
     #open tempfile for each two first aminos
-    files = {int2mer(i, alphabet, keylen): tempfile.TemporaryFile(dir=os.path.curdir) for i in xrange(len(alphabet)**keylen)}
+    files = {int2mer(i, alphabet, keylen): tempfile.TemporaryFile(dir=os.path.curdir) \
+             for i in xrange(len(alphabet)**keylen)}
     #hash sequences
     i = 0
     for i, seqid, seq in parser:
@@ -274,9 +295,9 @@ def main():
         #prepare database
         cur = dbConnect_sqlite(o.db, o.table, o.kmer, o.verbose, o.replace)
         #get parser
-        parser    = fasta_parser(o.input, cur, o.verbose)
+        parser = fasta_parser(o.input, cur, o.verbose)
         #hash seqs
-        files     = hash_sequences(parser, o.kmer, o.step, o.seqlimit, o.dna, o.verbose)
+        files = hash_sequences(parser, o.kmer, o.step, o.seqlimit, o.dna, o.verbose)
         #upload
         discarded = upload_sqlite(files, cur, o.table, o.seqlimit, o.verbose)
     else:
@@ -285,13 +306,15 @@ def main():
         if pswd==None:
             pswd = getpass.getpass("Enter MySQL password: ")
         #connect
-        cur       = dbConnect(o.db, o.host, o.user, pswd, o.table, o.kmer, o.verbose, o.replace)
+        cur = dbConnect(o.db, o.host, o.user, pswd, o.table, o.kmer, o.verbose, \
+                        o.replace)
         #get parser
-        parser    = db_seq_parser(cur, o.cmd, o.verbose)
+        parser = db_seq_parser(cur, o.cmd, o.verbose)
         #hash seqs
-        files     = hash_sequences(parser, o.kmer, o.step, o.seqlimit, o.dna, o.verbose)
+        files = hash_sequences(parser, o.kmer, o.step, o.seqlimit, o.dna, o.verbose)
         #upload
-        discarded = upload(files, o.db, o.host, o.user, pswd, o.table, o.kmer, o.seqlimit, o.verbose)
+        discarded = upload(files, o.db, o.host, o.user, pswd, o.table, o.kmer, \
+                           o.seqlimit, o.verbose)
     
     sys.stderr.write("hash_discarded: %s memory: %s MB\n" % (discarded, memory_usage())) 
     
