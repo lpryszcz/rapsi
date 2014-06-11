@@ -18,6 +18,11 @@ TO ADD:
 
 
 CHANGELOG:
+v1.3:
+- np.array compression (30% reduced hash size)
+- batch query
+- P & E-value statistics
+- bz2 support
 v1.2:
 - DNA support
 v1.1:
@@ -27,8 +32,9 @@ v1.1:
 - BGZIP support
 """
 
-import commands, gzip, os, sys, time, zlib
+import commands, gzip, math, os, sys, time
 import MySQLdb, resource, sqlite3, tempfile
+import numpy as np
 from datetime import datetime
 from Bio import SeqIO, bgzf
 from htmlTable import htmlTable
@@ -60,60 +66,60 @@ def sqlite2seq(cur, db, protids):
             sys.stderr.write("[Warning] Cannot fetch sequence for %s at %s + %s bytes\n"%(name, offset, length))
     return "".join(targets)
 
-def mysql2seq(cur, protids, seqcmd, intprotids):
+def mysql2seq(cur, protids, seqcmd):
     """Return target fasta for protids from mysql."""
-    if intprotids:
-        protidstext = ",".join(str(p) for p in protids)
-    else:
-        protidstext = "'" + "','".join(str(p) for p in protids) + "'"
-    cur.execute(seqcmd % protidstext)
+    protidstext = "'" + "','".join(str(p) for p in protids) + "'"
+    cur.execute(seqcmd%protidstext)
     return [">%s\n%s\n" % tup for tup in cur.fetchall()]
     
-def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampling, \
-                intprotids, seq2mers, verbose):
+def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, samplings, \
+                seq2mers, dtype, verbose):
     """Return matching protids and sequences"""
     if verbose:
-        sys.stderr.write("Parsing %s aminos from: %s...\n" % (len("".join(qseqs)), qid))
-    mers = set()
+        info = "Parsing %s aminos from %s sequences...\n"
+        sys.stderr.write(info % (len("".join(qseqs)), len(qseqs)))
+    kmers = [] #set()
     for qseq in qseqs:
-        mers = mers.union(seq2mers(qseq, kmer, step))
+        #kmers = kmers.union(seq2mers(qseq, kmer, step))
+        kmers.append(seq2mers(qseq, kmer, step))
     if verbose:
-        sys.stderr.write("  %s mers: %s...\n"% (len(mers),", ".join(list(mers)[:6])))
-    if sampling and len(mers)>sampling:
-        mers = list(mers)[:sampling]
+        sys.stderr.write("  %s mers\n"%sum(len(x) for x in kmers))
+    for sampling in samplings:
+        mers = []
+        for qmers in kmers:
+            mers += list(qmers)[:sampling]
+        mers = set(mers)
         if verbose:
             sys.stderr.write("  Sampled %s mers: %s...\n"% (len(mers),", ".join(list(mers)[:6])))
-    #get protids for set of mers
-    cmd = "select protids from `%s` where hash in ('%s')" % (table, "','".join(mers))    
-    cur.execute(cmd)
-    protids = {}
-    for merprotids, in cur:
-        #decode zlib coded str
-        if not seqcmd:
-            merprotids = zlib.decompress(merprotids)
-        for protid in merprotids.split():
-            #add hits
-            if protid not in protids:
-                protids[protid]  = 1
-            else:
-                protids[protid] += 1
-                
-    #select upto 100 best seqs with most kmers matching
-    fprotids = protids
-    if len(fprotids)>seqlimit:
-        counts = [0]*(max(protids.itervalues())+1)
-        for p, c in protids.iteritems():
-            counts[c] += 1
-        maxc = 0
-        for i, c in enumerate(reversed(counts), 1):
-            maxc += c
-            if maxc>seqlimit:
-                break
-        n = len(counts)-i
-        fprotids = filter(lambda x: protids[x]>n, protids)
-        if verbose:
-            sys.stderr.write("   %8i protids having %s+ kmer matches.\n"% (len(fprotids), n))
-
+        #get protids for set of mers
+        cmd = "select protids from `%s` where hash in ('%s')" % (table, "','".join(mers))    
+        cur.execute(cmd)
+        protids = {}
+        for merprotids, in cur:
+            #unpack numpy object
+            for protid in np.fromstring(merprotids, dtype=dtype):
+                if protid not in protids:
+                    protids[protid]  = 1
+                else:
+                    protids[protid] += 1
+        #select upto 100 best seqs with most kmers matching
+        fprotids = protids
+        if len(fprotids)>seqlimit:
+            counts = [0]*(max(protids.itervalues())+1)
+            for p, c in protids.iteritems():
+                counts[c] += 1
+            maxc = 0
+            for i, c in enumerate(reversed(counts), 1):
+                maxc += c
+                if maxc>seqlimit:
+                    break
+            n = len(counts)-i
+            fprotids = filter(lambda x: protids[x]>n, protids)
+            if verbose:
+                sys.stderr.write("   %8i protids having %s+ kmer matches.\n"% (len(fprotids), n))
+        if fprotids:
+            break
+    #return None if no kmer matches
     if not fprotids:
         return 
     #get sequences
@@ -121,12 +127,13 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
         sys.stderr.write(" Fetching %s sequences...\n" % len(fprotids))
     #select protids as text or str
     if seqcmd:
-        targets = mysql2seq(cur, fprotids, seqcmd, intprotids)
+        targets = mysql2seq(cur, fprotids, seqcmd)
     else:
         targets = sqlite2seq(cur, db, fprotids)
     return targets
     
-def hits2algs(qname, qseqs, matches, blatpath, tmpdir, link, dna, verbose):
+def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbose, \
+              Lambda=0.318, K=0.13):
     """Align query with hits and return global algs."""
     if verbose:
         sys.stderr.write(" Aligning...\n")    
@@ -135,16 +142,13 @@ def hits2algs(qname, qseqs, matches, blatpath, tmpdir, link, dna, verbose):
     tmpfn = os.path.join(tmpdir, "tmp.%s"%time.time())
     #write query
     tmpq = "%s.query" % tmpfn
-    with open(tmpq, "w") as tmpqf:
-        if len(qseqs)>1:
-            for i, qseq in enumerate(qseqs, 1):
-                tmpqf.write(">%s.%s\n%s\n"%(qname, i, qseq))
-        else:
-            tmpqf.write(">%s\n%s\n"%(qname, qseqs[0]))
+    tmpqf = open(tmpq, "w")# as tmpqf:
+    for i, (qid, qseq) in enumerate(zip(qids, qseqs), 1):
+        tmpqf.write(">%s.%s\n%s\n"%(qid, i, qseq))
+    tmpqf.close()
     #write targets
-    tmpt = "%s.target" % tmpfn#; os.mkfifo(tmpt)
-    with open(tmpt, "w") as tmptf:
-        tmptf.write("".join(matches))
+    tmpt = "%s.target" % tmpfn
+    tmptf = open(tmpt, "w"); tmptf.write("".join(matches)); tmptf.close()
     #run blat
     tmpr = "%s.out" % tmpfn
     if dna:
@@ -161,23 +165,31 @@ def hits2algs(qname, qseqs, matches, blatpath, tmpdir, link, dna, verbose):
         sys.stderr.write("BLAT failed (%s):\n%s\n"%(cmd, blatout))
         return
     #load results
-    algs = []
+    pq, algs = "", []
     for l in open(tmpr):
-        ##BLAT PSL
+        ##BLAT PSL without header
         (matches, mismatches, repm, Ns, Qgapc, Qgaps, Tgapc, Tgaps, strand, \
          q, qsize, qstart, qend, t, tsize, tstart, tend, blocks, bsizes, \
          qstarts, tstarts) = l.split('\t')
+        #unpack batch
+        q = ".".join(q.split('.')[:-1])
         matches, mismatches = int(matches), int(mismatches)
         Tgapc, Tgaps = int(Tgapc), int(Tgaps)
         qstart, qend = int(qstart), int(qend)
         qstart, qend, qsize = int(qstart), int(qend), int(qsize)
         tstart, tend, tsize = int(tstart), int(tend), int(tsize)
-        #get score, identity & overlap - E-value???
-        score    = matches * 2 + mismatches * -1.5 + Tgapc * -11 + Tgaps * -1
-        e = '-'
+        #get score, identity & overlap
+        #score    = matches * 2 + mismatches * -1.5 + Tgapc * -11 + Tgaps * -1
+        score    = matches * 5 + mismatches * -3 + Tgapc * -4 + Tgaps * -1
         alglen   = int(tend) - int(tstart)
         identity = 100.0 * matches / alglen
         overlap  = 100.0 * alglen / tsize
+        #bitscore & evalue
+        bitscore = (Lambda*score-math.log(K))/math.log(2)
+        pvalue = evalue = 0
+        if dblength:
+            pvalue = 2**-bitscore
+            evalue = len(qseqs[0]) * dblength * pvalue
         #get t and q ranges
         qranges  = get_ranges(qstarts, bsizes)
         tranges  = get_ranges(tstarts, bsizes)
@@ -186,15 +198,23 @@ def hits2algs(qname, qseqs, matches, blatpath, tmpdir, link, dna, verbose):
             tlink = link % tuple([t]*link.count('%s'))
         else:
             tlink = t
-        algs.append((q, tlink, round(identity, 1), round(overlap, 1), int(score), \
-                     mismatches, Tgaps, alglen, qranges, tranges))
+        #yield if next query and any algs
+        if q!=pq and algs:
+            yield sorted(algs, key=lambda x: x[4], reverse=True)
+            algs = []
+        #add alg to list
+        pq = q
+        algs.append((q, tlink, round(identity,1), round(overlap,1), round(bitscore,2),\
+                     "%.3g"%evalue, mismatches, Tgaps, alglen, qranges, tranges))
+    #yield last alg
+    if algs:
+        yield sorted(algs, key=lambda x: x[4], reverse=True)
     #clean-up
-    if "Error:" not in blatout:
+    if "Error:" not in blatout and "No such file" not in blatout:
         os.unlink(tmpq)
         os.unlink(tmpt)
         os.unlink(tmpr)
-    return sorted(algs, key=lambda x: float(x[3]), reverse=True)
-
+        
 def get_ranges(starts, sizes, offset=1):
     """Return str representation of alg ranges"""
     ranges = []
@@ -212,11 +232,8 @@ def algs2formatted_output(algs, ifrac, ofrac, html, verbose, no_query):
     blastTable = htmlTable()
     blastTable.style = "gtable"
     #add header
-    '''headerNames = ["Hit ID", "% identity", "% overlap", "E-value", "Score", \
-                   "Alg. length", "Mis-matches", "Gaps", "Q. start", "Q. end", \
-                   "T. start", "T. end"] '''
-    headerNames = ["Query", "Target", "% identity", "% overlap", "Score", \
-                   "Mis-matches", "Gaps", "Alg. length", "Q. ranges", "T. ranges"]
+    headerNames = ["Query", "Target", "% identity", "% overlap", "Bit score", "E-value",\
+                   "Mis- matches", "Gaps", "Alg. length", "Q. ranges", "T. ranges"]
     for name in headerNames: 
         blastTable.add_cell(0, name)
     #add results
@@ -237,9 +254,9 @@ def algs2formatted_output(algs, ifrac, ofrac, html, verbose, no_query):
     else:
         return blastTable.asTXT()
 
-def fasta2hits(cur, db, table, seqcmd, qid, qseqs, blatpath, tmpdir, kmer, step, \
-               seqlimit, html, link, sampling, intprotids, verbose, dna=False, \
-               ifrac=0.3, ofrac=0.3, no_query=True):
+def fasta2hits(cur, db, table, seqcmd, qids, qseqs, blatpath, tmpdir, kmer, step, \
+               seqlimit, html, link, sampling, dblength, verbose, dna=False, \
+               ifrac=0.3, ofrac=0.3, dtype="uint32", no_query=True):
     """Report hits to qseq from hash table and sequences.
     Deals with both, single seq and list of translated sequences.
     """
@@ -253,24 +270,24 @@ def fasta2hits(cur, db, table, seqcmd, qid, qseqs, blatpath, tmpdir, kmer, step,
     else:
         seq2mers = aaseq2mers
     #get kmer matching sequences
-    matches = seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, \
-                          sampling, intprotids, seq2mers, verbose)
+    matches = seq2matches(cur, db, table, seqcmd, qids, qseqs, kmer, step, seqlimit, \
+                          sampling, seq2mers, dtype, verbose)
 
     if not matches:
-        return "#Your query %s didn't produce any hit.\n"%qid
+        return "#Your query (%s) didn't produce any hit.\n"%", ".join(qids)
     
     #align with blat
-    algs = hits2algs(qid, qseqs, matches, blatpath, tmpdir, link, dna, verbose)
-
-    if not algs:
-        return "#Your query %s didn't produce any valid hit.\n"%qid
-    
-    #return formatted output
-    out  = algs2formatted_output(algs, ifrac, ofrac, html, verbose, no_query)
+    out = ""
+    algs = []
+    for algs in hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbose):
+        #return formatted output
+        out += algs2formatted_output(algs, ifrac, ofrac, html, verbose, no_query)
     #write run stats
     dt = time.time() - t0
-    with open(os.path.join(tmpdir, "fasta2hits.times.txt"), "a") as outtmp:
-        outtmp.write("%s\t%s\t%s\n"%(qid, len(qseqs), dt))
+    info = "%s\t%s\t%s\t%.3f\t%s\n"%(datetime.ctime(datetime.now()), len("".join(qseqs)), len(algs), dt, "; ".join(qids))
+    open(os.path.join(tmpdir, "fasta2hits.times.txt"), "a").write(info)
+    if not out:
+        return "#Your query (%s) didn't produce any valid hit.\n"%", ".join(qids)
     return out
 
 def get_sixframe_translations(r):
@@ -283,7 +300,7 @@ def get_sixframe_translations(r):
     return seqs
     
 def main():
-    #compatible with severs without argparse
+    #compatible with Python2.6 without argparse
     import argparse
     usage   = "%(prog)s -v"
     parser  = argparse.ArgumentParser(usage=usage, description=desc, epilog=epilog, \
@@ -291,9 +308,11 @@ def main():
 
     seqformats = ['fasta', 'fastq', 'gb', 'genbank', 'embl']
     parser.add_argument("-v", dest="verbose",  default=False, action="store_true", help="verbose")    
-    parser.add_argument('--version', action='version', version='%(prog)s 1.1')   
+    parser.add_argument('--version', action='version', version='%(prog)s 1.3b')   
     parser.add_argument("-i", "--input",     type=file, default=sys.stdin, 
                         help="fasta stream    [stdin]")
+    parser.add_argument("-b", "--batch",     type=int, default=1, 
+                        help="query batch     [%(default)s]")
     parser.add_argument("--seqformat",       default="auto", choices = seqformats,
                         help="input format    [%(default)s]")
     parser.add_argument("-X", "--rapsiX",    default=False, action="store_true", 
@@ -321,8 +340,8 @@ def main():
                         help="hash steps      [%(default)s]")
     similo.add_argument("--seqlimit",         default=100, type=int, 
                         help="max. seqs to retrieve [%(default)s]")
-    similo.add_argument("-n", "--sampling",   default=0, type=int,
-                        help="sample n kmers from query [all]")
+    similo.add_argument("-n", "--sampling",   nargs="*", default=[100], type=int,
+                        help="sample n kmers per query %(default)s")
     similo.add_argument("--ifrac",            default=0.3, type=float, 
                         help="min. identity of best hit [%(default)s]")
     similo.add_argument("--ofrac",            default=0.3, type=float, 
@@ -330,7 +349,7 @@ def main():
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
                         help="database        [%(default)s]")
-    sqlopt.add_argument("-t", "--table",      default='hash2protids4',
+    sqlopt.add_argument("-t", "--table",      default='hash2protids',
                         help="hashtable name  [%(default)s]")
     mysqlo = parser.add_argument_group('MySQL options')
     mysqlo.add_argument("-u", "--user",      default="lpryszcz", 
@@ -341,29 +360,42 @@ def main():
                         help="database host   [%(default)s]")
     parser.add_argument("--seqcmd",           default="",
                         help="SQL to fetch sequences [%(default)s]")
-    mysqlo.add_argument("--intprotids",       default=False,
-                        help="protids are INT [STRING]") 
-                         
+    mysqlo.add_argument("--dtype",            default="uint32", 
+                        help="numpy data type for protids [%(default)s] ie. S8 for VARCHAR(8) or uint16 for SMALLINT UNSIGNED")
+    mysqlo.add_argument("-z", "--dblength",   default=0, type=int,
+                        help="database length for E-value calculation [%(default)s]")
+    
     o = parser.parse_args()
     if o.verbose:
         sys.stderr.write("Options: %s\n"%str(o))
         
     if os.path.isfile(o.db):
         cnx = sqlite3.connect(o.db)
+        #enable utf8 handling
+        cnx.text_factory = str 
         cur = cnx.cursor()
+        #get dblength
+        cur.execute("select value from meta_data where key='dblength'")
+        o.dblength = int(cur.fetchone()[0])
+        if o.verbose:
+            sys.stderr.write("DB length: %s\n"%o.dblength)
     else:
         if not o.seqcmd:
             sys.exit("Sequence command (--seqcmd) needed for MySQL")
         cnx = MySQLdb.connect(db=o.db, host=o.host, user=o.user, passwd=o.pswd)
         cur = cnx.cursor()
 
-    #handle gz
+    #handle gz/bz2
     handle = o.input
     seqformatpos = -1
-    '''if handle.name.endswith('.gz'):
+    if handle.name.endswith('.gz'):
         seqformatpos = -2
-        handle = gzip.open(handle.name)'''
-        
+        handle = gzip.open(handle.name)
+    elif handle.name.endswith('.bz2'):
+        import bz2
+        seqformatpos = -2
+        handle = bz2.BZ2File(handle.name)
+    
     #get seqformat
     seqformat = o.seqformat
     if seqformat == "auto":
@@ -378,20 +410,32 @@ def main():
             sys.exit("Cannot guess input sequence format: %s\n"%handle.name)
     
     #process entries        
+    seqs, qids = [], []
     for i, r in enumerate(SeqIO.parse(handle, seqformat), 1):
-        if not i%100:
+        if not i%o.batch:
             sys.stderr.write(" %s \r"%i)
         if o.limit and i>o.limit:
             break
         #get 6-frames translations
         if o.rapsiX:
-            seqs = get_sixframe_translations(r)
+            seqs += get_sixframe_translations(r)
+            qids += [r.id]*6
         else:
-            seqs = [str(r.seq),]
-        out = fasta2hits(cur, o.db, o.table, o.seqcmd, r.id, seqs, o.blatpath, \
+            seqs.append(str(r.seq))
+            qids.append(r.id)
+        #batch query
+        if not i%o.batch:
+            out = fasta2hits(cur, o.db, o.table, o.seqcmd, qids, seqs, o.blatpath, \
+                             o.tmpdir, o.kmer, o.step, o.seqlimit, o.html, o.link, \
+                             o.sampling, o.dblength, o.verbose, o.dna, \
+                             o.ifrac, o.ofrac, o.dtype, o.no_query)
+            o.output.write(out)
+            seqs, qids = [], []
+    if seqs:
+        out = fasta2hits(cur, o.db, o.table, o.seqcmd, qids, seqs, o.blatpath, \
                          o.tmpdir, o.kmer, o.step, o.seqlimit, o.html, o.link, \
-                         o.sampling, o.intprotids, o.verbose, o.dna, o.ifrac, o.ofrac, \
-                         o.no_query)
+                         o.sampling, o.dblength, o.verbose, o.dna, \
+                         o.ifrac, o.ofrac, o.dtype, o.no_query)
         o.output.write(out)
         
 if __name__=='__main__': 

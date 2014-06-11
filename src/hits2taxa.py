@@ -96,7 +96,7 @@ def get_matches_blast8(input, verbose):
                 start, end = end, start
         #rapsi
         else:
-            q, ref, ident, overlap, score, mmatches, gaps, alen, qranges, tranges = ldata
+            q, ref, ident, overlap, score, e, mmatches, gaps, alen, qranges, tranges = ldata
             start = int(tranges.split()[0].split('-')[0])
             end   = int(tranges.split()[-1].split('-')[1])
         if float(score) < pscore:
@@ -154,9 +154,13 @@ def hits2taxa(input, out, db, verbose, limit=0):
     #init taxonomy
     taxa = Taxonomy(db)
 
-    #hadle gzipped stream
+    #hadle gzipped/bzip2 stream
     if input.name.endswith('.gz'):
         input = gzip.open(input.name)
+    elif input.name.endswith('.bz2'):
+        import bz2
+        input = bz2.BZ2File(input.name)
+    #get match generator
     if input==sys.stdin:
         line0 = input.readline()
         if line0.startswith('@'):

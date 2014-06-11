@@ -1,5 +1,18 @@
 #!/usr/bin/env python
 desc="""Generate hash table and load it to db.
+
+CHANGELOG:
+v1.3:
+- np.array compression (30% reduced hash size)
+- batch query
+- P & E-value statistics
+v1.2:
+- DNA support
+v1.1:
+- implemented nucleotide query (rapsiX)
+- FastQ, genbank, embl support
+- auto query format recognition
+- BGZIP support
 """
 epilog="""Author:
 l.p.pryszcz@gmail.com
@@ -7,13 +20,15 @@ l.p.pryszcz@gmail.com
 Barcelona/Mizerow, 13/11/2013
 """
 
-import os, sys, time, zlib
-import getpass, resource
+import os, sys, time
+import getpass, resource, subprocess
 import MySQLdb, MySQLdb.cursors, sqlite3, tempfile
+import numpy as np
 from datetime import datetime
 from Bio import SeqIO, bgzf
 
 aminos = 'ACDEFGHIKLMNPQRSTVWY'
+aminoset = set(aminos)
 nucleotides = 'ACGT'
 DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
 
@@ -37,15 +52,9 @@ def int2mer(meri, aminos, kmer):
 
 def aaseq2mers(seq, kmer, step, aminoset=set(aminos)):
     """Kmers generator for amino seq"""
-    mers = set()
-    #skip first amino; usually M
-    for s in xrange(1, len(seq)-kmer, step):
-        mer = seq[s:s+kmer]
-        #skip mer containing non-standard aminos
-        if not aminoset.issuperset(mer):
-            continue
-        mers.add(mer)
-    return mers
+    """Kmers generator for seq"""
+    return set(seq[s:s+kmer] for s in xrange(1, len(seq)-kmer, step) \
+               if aminoset.issuperset(seq[s:s+kmer]))
 
 def reverse_complement(mer):
     """Return DNA reverse complement"""
@@ -90,9 +99,10 @@ def fasta_parser(fastas, cur, verbose):
     Handle bgzip compressed files.
     """
     if verbose:
-        sys.stderr.write("Indexing and hashing sequences...\n")
+        sys.stderr.write("[%s] Indexing and hashing sequences...\n"%datetime.ctime(datetime.now()))
     #parse fasta
     i = 0
+    seqlen = 0
     for fi, fn in enumerate(fastas):
         #add file to db
         cur.execute("INSERT INTO file_data VALUES (?, ?)",(fi, fn))
@@ -103,25 +113,33 @@ def fasta_parser(fastas, cur, verbose):
             handle = open(fn)
         #parse entries
         for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
-            #store entry offset
+            if i>100000: break
+            seqlen += len(seq)
             cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",\
                         (i, fi, offset, elen))
             yield i, i, seq
+    if verbose:
+        sys.stderr.write(" %s letters in %s sequences\n"%(seqlen, i))
     #fill metadata
     cur.executemany("INSERT INTO meta_data VALUES (?, ?)",\
-                    (('count', i),('format','fasta')))
+                    (('count', i),('format','fasta'),('dblength',seqlen)))
+    #and commit changes
     cur.connection.commit()
 
 def db_seq_parser(cur, cmd, verbose):
     """Database iterator returning i, seqid and seq"""
     l = cur.execute(cmd) 
     if verbose:
-        sys.stderr.write("Hashing sequences...\n")
+        sys.stderr.write("[%s] Hashing sequences...\n"%datetime.ctime(datetime.now()))
+    seqlen = 0
     #parse seqs
     for i, (seqid, seq) in enumerate(cur, 1):
+        seqlen += len(seq)
         yield i, seqid, seq
+    if verbose:
+        sys.stderr.write(" %s letters in %s sequences\n"%(seqlen, i))
         
-def hash_sequences(parser, kmer, step, seqlimit, dna, verbose):
+def hash_sequences(parser, kmer, step, dna, verbose):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
@@ -134,8 +152,9 @@ def hash_sequences(parser, kmer, step, seqlimit, dna, verbose):
         keylen   = 2
     alphabetset = set(alphabet)
     #open tempfile for each two first aminos
-    files = {int2mer(i, alphabet, keylen): tempfile.TemporaryFile(dir=os.path.curdir) \
-             for i in xrange(len(alphabet)**keylen)}
+    files = {} 
+    for i in xrange(len(alphabet)**keylen):
+        files[int2mer(i, alphabet, keylen)] = tempfile.TemporaryFile(dir=os.path.curdir)  
     #hash sequences
     i = 0
     for i, seqid, seq in parser:
@@ -143,11 +162,11 @@ def hash_sequences(parser, kmer, step, seqlimit, dna, verbose):
             sys.stderr.write(" %s\r" % i)
         for mer in seq2mers(seq, kmer, step, alphabetset):
             files[mer[:keylen]].write("%s\t%s\n"%(mer, seqid))
-    sys.stderr.write(" %s\n" % i)
-    return files
+    return files, i
 
-def parse_tempfiles(files, seqlimit):
+def parse_tempfiles(files, seqlimit, verbose=1):
     """Generator of mer, protids from each tempfile"""
+    i = discarded = 0
     for f in files.itervalues():
         f.flush()
         f.seek(0)
@@ -159,32 +178,48 @@ def parse_tempfiles(files, seqlimit):
                     mer2protids[mer].append(protid)
                     if len(mer2protids[mer]) > seqlimit:
                         mer2protids[mer] = None
+                        discarded += 1
             else:
                 mer2protids[mer] = [protid]
-        for mer, protids in mer2protids.iteritems():
+        for i, (mer, protids) in enumerate(mer2protids.iteritems(), i+1):
+            if not i%10000:
+                sys.stderr.write("  %s \r"%i)
             yield mer, protids
-    
-def upload(files, db, host, user, pswd, table, kmer, seqlimit, verbose):        
-    """Load to database"""
+    info = " %s hash uploaded; discarded: %s; memory: %s MB\n"
+    sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
+            
+def upload(files, db, host, user, pswd, table, seqlimit, dtype, verbose, \
+           sep = "..|..", end = "..|.\n"):
+    """Load to database."""
+    args = ["mysql", "-vvv", "-h", host, "-u", user, db, "-e", \
+            "LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY '%s' LINES TERMINATED BY '%s'"%(table, sep, end)]
     if verbose:
-        sys.stderr.write("Uploading to database...\n")
-    rows = discarded = 0
-    cnx = MySQLdb.connect(db=db, host=host, user=user, passwd=pswd, local_infile = 1)
-    cur = cnx.cursor()
-    for mer, protids in parse_tempfiles(files, seqlimit):
+        info = "[%s] Uploading to database...\n %s\n" 
+        sys.stderr.write(info%(datetime.ctime(datetime.now()), " ".join(args)))
+    if pswd:
+        args.append("-p%s"%pswd)
+    proc = subprocess.Popen(args, stdin=subprocess.PIPE, stderr=sys.stderr)
+    out  = proc.stdin
+    i = discarded = 0
+    for i, (mer, protids) in enumerate(parse_tempfiles(files, seqlimit), 1):
         if not protids:
             discarded += 1
             continue
-        rows += 1
-        cur.execute("INSERT INTO `"+table+"` VALUES (%s, %s)",\
-                    (mer, buffer(zlib.compress(" ".join(protids)))))        
+        out.write("%s%s%s%s"%(mer, sep, np.array(protids, dtype=dtype).tostring(), end))
+        if verbose and not i%10000:
+            sys.stderr.write("  %s processed; %s discarded\r" % (i, discarded))
+    return i, discarded
+        
+def batch_insert(files, cur, table, seqlimit, verbose, dtype="uint32", rep="?"):
+    """Insert to database."""
     if verbose:
-        sys.stderr.write(" %s rows uploaded!\n"%rows)
-    cmd = "ALTER TABLE `%s` ADD KEY `idx_hash` (`hash`)" % table
-    if verbose:
-        sys.stderr.write("Creating index: %s\n"%cmd)
-    cur.execute(cmd)
-    return discarded
+        sys.stderr.write("[%s] Uploading...\n"%datetime.ctime(datetime.now()))
+    cmd = 'INSERT INTO %s VALUES (%s, %s)'%(table, rep, rep)
+    cur.executemany(cmd, ((mer, buffer(np.array(protids, dtype=dtype).tostring())) \
+                    for mer, protids in parse_tempfiles(files, seqlimit) if protids))
+    #commit
+    cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
+    cur.connection.commit()
     
 def dbConnect(db, host, user, pswd, table, kmer, verbose, replace):
     """Get connection and create empty table.
@@ -205,28 +240,14 @@ def dbConnect(db, host, user, pswd, table, kmer, verbose, replace):
             cur.execute(cmd)
         else:
             sys.exit('Table %s already exists!'%table)
-    #create table #index added after compression 
-    cmd = 'CREATE TABLE `%s` (`hash` CHAR(%s), `protids` BLOB) ENGINE=MyISAM' % (table, kmer)
+    #create table #index added after compression PRIMARY KEY
+    cmd = 'CREATE TABLE `%s` (`hash` CHAR(%s), `protids` BLOB) ENGINE=MyISAM'%(table, kmer)
     if verbose:
         sys.stderr.write(" %s\n"%cmd)
     cur.execute(cmd)
+    #cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
     return cur
-    
-def upload_sqlite(files, cur, table, seqlimit, verbose):
-    """Load data from tmpfiles into sqlite3."""
-    if verbose:
-        sys.stderr.write("Loading into database...\n")
-    #upload
-    discarded = 0
-    for mer, protids in parse_tempfiles(files, seqlimit):
-        if not protids:
-            discarded += 1
-            continue 
-        cur.execute("INSERT INTO %s VALUES (?,?)"%table,\
-                    (mer, buffer(zlib.compress(" ".join(protids)))))
-    cur.connection.commit()
-    return discarded
-    
+
 def dbConnect_sqlite(db, table, kmer, verbose, replace):
     """Get connection and create empty table.
     Exit if table exists and no overwritting."""
@@ -241,16 +262,20 @@ def dbConnect_sqlite(db, table, kmer, verbose, replace):
             sys.exit(" Database %s already exists!"%db)
     #connect
     cnx = sqlite3.connect(db)
-    cnx.text_factory = str #sqlite3.OptimizedUnicode
+    #enable utf8 handling
+    cnx.text_factory = str 
     cur = cnx.cursor()
+    ##bullshit? no time diff
     #asyn execute >50x faster ##http://www.sqlite.org/pragma.html#pragma_synchronous 
+    #http://stackoverflow.com/questions/1711631/how-do-i-improve-the-performance-of-sqlite
     cur.execute("PRAGMA synchronous=OFF")
-    #prepare tables and indices
+    cur.execute("PRAGMA journal_mode = MEMORY")
+    #prepare tables and indices PRIMARY KEY
     cur.execute("CREATE TABLE meta_data (key TEXT, value TEXT)")
     cur.execute("CREATE TABLE file_data (file_number INTEGER, name TEXT)")
     cur.execute("CREATE TABLE offset_data (key INTEGER PRIMARY KEY, file_number INTEGER, offset INTEGER, length INTEGER)")
-    cur.execute("CREATE TABLE %s (hash CHAR(%s) PRIMARY KEY, protids BLOB)" % (table, kmer))
-    return cur  
+    cur.execute("CREATE TABLE %s (hash CHAR(%s), protids array)"%(table, kmer))
+    return cur
             
 def main():
     import argparse
@@ -258,7 +283,7 @@ def main():
     parser  = argparse.ArgumentParser(usage=usage, description=desc, epilog=epilog)
   
     parser.add_argument("-v", dest="verbose",  default=False, action="store_true", help="verbose")    
-    parser.add_argument('--version', action='version', version='1.0')   
+    parser.add_argument('--version', action='version', version='1.3b')   
     parser.add_argument("-i", "--input",      nargs="*",
                         help="fasta file(s)   [get seqs from db]")
     parser.add_argument("-k", "--kmer",       default=5, type=int, 
@@ -267,14 +292,14 @@ def main():
                         help="overwrite table if exists")
     parser.add_argument("-s", "--step",       default=1, type=int, 
                         help="hash steps      [%(default)s]")
-    parser.add_argument("--seqlimit",         default=2000, type=int, 
-                        help="ignore too common kmers [%(default)s]")
-    parser.add_argument("--dna",             default=False, action='store_true',
+    parser.add_argument("--kmerfrac",         default=0.01, type=float, 
+                        help="ignore kmers present in more than [%(default)s] percent targets")
+    parser.add_argument("--dna",              default=False, action='store_true',
                         help="DNA alphabet    [amino acids]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
                         help="database        [%(default)s]")
-    sqlopt.add_argument("-t", "--table",      default='hash2protids4',
+    sqlopt.add_argument("-t", "--table",      default='hash2protids',
                         help="hashtable name  [%(default)s]")
     mysqlo = parser.add_argument_group('MySQL options')
     mysqlo.add_argument("-u", "--user",       default="lpryszcz", 
@@ -285,6 +310,8 @@ def main():
                         help="database host   [%(default)s]")
     mysqlo.add_argument("-c", "--cmd",        default="SELECT protid, seq FROM protid2seq", 
                         help="cmd to get protid, seq from db [%(default)s]")
+    mysqlo.add_argument("--dtype",            default="uint32", 
+                        help="numpy data type for protids [%(default)s] ie. S8 for VARCHAR(8) or uint16 for SMALLINT UNSIGNED")
                         
     o = parser.parse_args()
     if o.verbose:
@@ -297,9 +324,10 @@ def main():
         #get parser
         parser = fasta_parser(o.input, cur, o.verbose)
         #hash seqs
-        files = hash_sequences(parser, o.kmer, o.step, o.seqlimit, o.dna, o.verbose)
+        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose)
+        seqlimit = o.kmerfrac * targets / 100
         #upload
-        discarded = upload_sqlite(files, cur, o.table, o.seqlimit, o.verbose)
+        batch_insert(files, cur, o.table, seqlimit, o.verbose)
     else:
         #prompt for mysql passwd
         pswd = o.pswd
@@ -311,12 +339,11 @@ def main():
         #get parser
         parser = db_seq_parser(cur, o.cmd, o.verbose)
         #hash seqs
-        files = hash_sequences(parser, o.kmer, o.step, o.seqlimit, o.dna, o.verbose)
+        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose)
+        seqlimit = o.kmerfrac * targets / 100
         #upload
-        discarded = upload(files, o.db, o.host, o.user, pswd, o.table, o.kmer, \
-                           o.seqlimit, o.verbose)
-    
-    sys.stderr.write("hash_discarded: %s memory: %s MB\n" % (discarded, memory_usage())) 
+        upload(files, o.db, o.host, o.user, pswd, o.table, seqlimit, o.dtype, o.verbose)
+        #batch_insert(files, cur, o.table, seqlimit, o.verbose, o.dtype, "%s")
     
 if __name__=='__main__': 
     t0  = datetime.now()
