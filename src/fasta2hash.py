@@ -139,11 +139,7 @@ def db_seq_parser(cur, cmd, verbose):
     if verbose:
         sys.stderr.write(" %s letters in %s sequences\n"%(seqlen, i))
         
-<<<<<<< HEAD
-def hash_sequences0(parser, kmer, step, dna, verbose, tmpdir='/tmp'):
-=======
-def hash_sequences(parser, kmer, step, dna, verbose):
->>>>>>> parent of 5458e73... rapsi v1.3: e-value, np.array compression, batch query
+def hash_sequences(parser, kmer, step, dna, verbose, tmpdir='/tmp'):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
@@ -158,7 +154,7 @@ def hash_sequences(parser, kmer, step, dna, verbose):
     #open tempfile for each two first aminos
     files = {} 
     for i in xrange(len(alphabet)**keylen):
-        files[int2mer(i, alphabet, keylen)] = tempfile.TemporaryFile(dir=os.path.curdir)  
+        files[int2mer(i, alphabet, keylen)] = tempfile.TemporaryFile(dir=os.path.curdir)
     #hash sequences
     i = 0
     for i, seqid, seq in parser:
@@ -167,61 +163,6 @@ def hash_sequences(parser, kmer, step, dna, verbose):
         for mer in seq2mers(seq, kmer, step, alphabetset):
             files[mer[:keylen]].write("%s\t%s\n"%(mer, seqid))
     return files, i
-
-def hash_sequences(parser, kmer, step, dna, verbose, cur, table, kmerfrac, \
-                   tmpdir="./", dtype="uint32", rep='?'):
-    """Parse input fasta and generate hash table."""
-    #get alphabet
-    if dna:
-        alphabet = nucleotides
-        seq2mers = dnaseq2mers
-        keylen   = 4 #16.4k
-    else:
-        alphabet = aminos
-        seq2mers = aaseq2mers
-        keylen   = 2 #2: 400 #3: 8k #4: 160k
-    alphabetset = set(alphabet)
-    #open tempfile for each two first aminos
-    files = {}
-    for i in xrange(len(alphabet)**keylen):
-        mer = int2mer(i, alphabet, keylen)
-        tmpdb = os.path.join(tmpdir, '.temp_pid%s_%s.db3'%(os.getpid(), mer))
-        commands.getoutput("sqlite3 %s 'CREATE TABLE `%s_tmp` (hash CHAR(%s), protid VARCHAR(25))'"%(tmpdb, table, kmer))
-        args = ["sqlite3", tmpdb, ".import /dev/stdin %s_tmp"%table]
-        proc = subprocess.Popen(args, stdin=subprocess.PIPE, stderr=sys.stderr)
-        files[mer] = (tmpdb, proc.stdin)
-    
-    #hash sequences
-    i = 0
-    for i, protid, seq in parser:
-        if verbose and not i%1e3:
-            sys.stderr.write(" %s [memory: %s MB]     \r" % (i, memory_usage()))
-        for mer in seq2mers(seq, kmer, step, alphabetset):
-            files[mer[:keylen]][1].write("%s|%s\n"%(mer, protid))
-    sys.stderr.write(" %s [memory: %s MB]      \n" % (i, memory_usage()))
-    seqlimit = int(kmerfrac * i / 100)
-    if verbose:
-        info = "[%s] Collapsing mers found in less than %s [%s%s] sequences ...\n"
-        sys.stderr.write(info%(datetime.ctime(datetime.now()), seqlimit, kmerfrac, '%'))
-    #close output
-    for tmpdb, out in files.itervalues():
-        out.close()
-    for i, (tmpdb, out) in enumerate(files.itervalues(), 1):
-        cur2 = sqlite3.connect(tmpdb).cursor()
-        cmd2 = "SELECT hash, GROUP_CONCAT(protid, ' ') FROM `%s_tmp` GROUP BY hash"%table
-        cur2.execute(cmd2)
-        sys.stderr.write(" %s / %s \r"%(i, len(files)))
-        cmd = 'INSERT INTO %s VALUES (%s, %s)'%(table, rep, rep)
-        cur.executemany(cmd, ((mer, np.array(protids.split(), dtype=dtype).tostring()) 
-                              for mer, protids in cur2.fetchall() 
-                              if protids.count(' ') + 1 < seqlimit))
-        #clean-up
-        os.unlink(tmpdb)
-        cur.connection.commit()
-    if verbose:
-        sys.stderr.write("[%s] Indexing...\n"%datetime.ctime(datetime.now()))
-    cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
-    cur.connection.commit()
     
 def parse_tempfiles(files, seqlimit, verbose=1):
     """Generator of mer, protids from each tempfile"""
@@ -304,7 +245,7 @@ def dbConnect(db, host, user, pswd, table, kmer, verbose, replace):
     if verbose:
         sys.stderr.write(" %s\n"%cmd)
     cur.execute(cmd)
-    #cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
+    cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
     return cur
 
 def dbConnect_sqlite(db, table, kmer, verbose, replace):
@@ -382,14 +323,12 @@ def main():
         cur = dbConnect_sqlite(o.db, o.table, o.kmer, o.verbose, o.replace)
         #get parser
         parser = fasta_parser(o.input, cur, o.verbose)
-        hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose, cur, o.table, \
-                       o.kmerfrac, o.tmpdir)
-        '''
         #hash seqs
-        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose)
+        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose, \
+                                        o.tmpdir)
         seqlimit = o.kmerfrac * targets / 100
         #upload
-        batch_insert(files, cur, o.table, seqlimit, o.verbose)'''
+        batch_insert(files, cur, o.table, seqlimit, o.verbose)
     else:
         #prompt for mysql passwd
         pswd = o.pswd
@@ -401,7 +340,8 @@ def main():
         #get parser
         parser = db_seq_parser(cur, o.cmd, o.verbose)
         #hash seqs
-        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose)
+        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose, \
+                                        o.tmpdir)
         seqlimit = o.kmerfrac * targets / 100
         #upload
         upload(files, o.db, o.host, o.user, pswd, o.table, seqlimit, o.dtype, o.verbose)
