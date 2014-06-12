@@ -113,18 +113,17 @@ def fasta_parser(fastas, cur, verbose):
             handle = open(fn)
         #parse entries
         for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
-            if i>100000: break
+            #if i>100000: break
             seqlen += len(seq)
             cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",\
                         (i, fi, offset, elen))
             yield i, i, seq
-    if verbose:
-        sys.stderr.write(" %s letters in %s sequences\n"%(seqlen, i))
     #fill metadata
     cur.executemany("INSERT INTO meta_data VALUES (?, ?)",\
                     (('count', i),('format','fasta'),('dblength',seqlen)))
     #and commit changes
     cur.connection.commit()
+    sys.stderr.write(" %s letters in"%seqlen)
 
 def db_seq_parser(cur, cmd, verbose):
     """Database iterator returning i, seqid and seq"""
@@ -139,29 +138,30 @@ def db_seq_parser(cur, cmd, verbose):
     if verbose:
         sys.stderr.write(" %s letters in %s sequences\n"%(seqlen, i))
         
-def hash_sequences(parser, kmer, step, dna, verbose):
+def hash_sequences(parser, kmer, step, dna, verbose, tmpdir='/tmp'):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
         alphabet = nucleotides
         seq2mers = dnaseq2mers
-        keylen   = 4
+        keylen   = 5 #16.4k
     else:
         alphabet = aminos
         seq2mers = aaseq2mers
-        keylen   = 2
+        keylen   = 2 #2: 400 #3: 8k #4: 160k
     alphabetset = set(alphabet)
     #open tempfile for each two first aminos
     files = {} 
     for i in xrange(len(alphabet)**keylen):
-        files[int2mer(i, alphabet, keylen)] = tempfile.TemporaryFile(dir=os.path.curdir)  
+        files[int2mer(i, alphabet, keylen)] = tempfile.TemporaryFile(dir=tmpdir)
     #hash sequences
     i = 0
     for i, seqid, seq in parser:
-        if verbose and not i%10e2:
-            sys.stderr.write(" %s\r" % i)
+        if verbose and not i%1e4:
+            sys.stderr.write(" %s [memory: %s MB]     \r" % (i, memory_usage()))
         for mer in seq2mers(seq, kmer, step, alphabetset):
             files[mer[:keylen]].write("%s\t%s\n"%(mer, seqid))
+    sys.stderr.write(" %s [memory: %s MB]      \n" % (i, memory_usage()))
     return files, i
 
 def parse_tempfiles(files, seqlimit, verbose=1):
@@ -183,13 +183,13 @@ def parse_tempfiles(files, seqlimit, verbose=1):
                 mer2protids[mer] = [protid]
         for i, (mer, protids) in enumerate(mer2protids.iteritems(), i+1):
             if not i%10000:
-                sys.stderr.write("  %s \r"%i)
+                sys.stderr.write("  %s processed; %s discarded\r" % (i, discarded))
             yield mer, protids
     info = " %s hash uploaded; discarded: %s; memory: %s MB\n"
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
             
 def upload(files, db, host, user, pswd, table, seqlimit, dtype, verbose, \
-           sep = "..|..", end = "..|.\n"):
+           tmpfile=0, upload=1, sep = "..|..", end = "..|.\n"):
     """Load to database."""
     args = ["mysql", "-vvv", "-h", host, "-u", user, db, "-e", \
             "LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY '%s' LINES TERMINATED BY '%s'"%(table, sep, end)]
@@ -200,15 +200,8 @@ def upload(files, db, host, user, pswd, table, seqlimit, dtype, verbose, \
         args.append("-p%s"%pswd)
     proc = subprocess.Popen(args, stdin=subprocess.PIPE, stderr=sys.stderr)
     out  = proc.stdin
-    i = discarded = 0
     for i, (mer, protids) in enumerate(parse_tempfiles(files, seqlimit), 1):
-        if not protids:
-            discarded += 1
-            continue
         out.write("%s%s%s%s"%(mer, sep, np.array(protids, dtype=dtype).tostring(), end))
-        if verbose and not i%10000:
-            sys.stderr.write("  %s processed; %s discarded\r" % (i, discarded))
-    return i, discarded
         
 def batch_insert(files, cur, table, seqlimit, verbose, dtype="uint32", rep="?"):
     """Insert to database."""
@@ -245,7 +238,7 @@ def dbConnect(db, host, user, pswd, table, kmer, verbose, replace):
     if verbose:
         sys.stderr.write(" %s\n"%cmd)
     cur.execute(cmd)
-    #cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
+    cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
     return cur
 
 def dbConnect_sqlite(db, table, kmer, verbose, replace):
@@ -292,10 +285,12 @@ def main():
                         help="overwrite table if exists")
     parser.add_argument("-s", "--step",       default=1, type=int, 
                         help="hash steps      [%(default)s]")
-    parser.add_argument("--kmerfrac",         default=0.01, type=float, 
+    parser.add_argument("--kmerfrac",         default=0.03, type=float, 
                         help="ignore kmers present in more than [%(default)s] percent targets")
     parser.add_argument("--dna",              default=False, action='store_true',
                         help="DNA alphabet    [amino acids]")
+    parser.add_argument("--tmpdir",           default='./',
+                        help="temp directory  [%(default)s]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
                         help="database        [%(default)s]")
@@ -324,7 +319,7 @@ def main():
         #get parser
         parser = fasta_parser(o.input, cur, o.verbose)
         #hash seqs
-        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose)
+        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose, o.tmpdir)
         seqlimit = o.kmerfrac * targets / 100
         #upload
         batch_insert(files, cur, o.table, seqlimit, o.verbose)
@@ -339,7 +334,7 @@ def main():
         #get parser
         parser = db_seq_parser(cur, o.cmd, o.verbose)
         #hash seqs
-        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose)
+        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose, o.tmpdir)
         seqlimit = o.kmerfrac * targets / 100
         #upload
         upload(files, o.db, o.host, o.user, pswd, o.table, seqlimit, o.dtype, o.verbose)
