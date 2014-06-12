@@ -36,19 +36,18 @@ def memory_usage():
     """Return memory usage in MB"""
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
-def int2mer(meri, aminos, kmer):
-    """Return char representation of mer
-    0      --> AAAAA
-    1      --> AAAAC
-    20^5-1 --> YYYYY"""
-    mer = []
-    while meri / len(aminos):
-        mer.append(aminos[meri % len(aminos)])
-        meri = meri / len(aminos)
-    mer.append(aminos[meri % len(aminos)])
-    mer.extend(['A']*(kmer-len(mer)))
-    mer.reverse()
-    return "".join(mer)
+def encode(n, alphabet, length=5, base=""):
+    """Converts a positive integer to a string based in given alphabet."""
+    while n != 0:
+        n, i = divmod(n, len(alphabet))
+        base = alphabet[i] + base
+    return base.rjust(length).replace(' ',alphabet[0])
+        
+def decode(base, alphabet, n=0):
+    """Convert string based in given alphabet to int."""
+    for i, char in enumerate(base, 1):
+        n += alphabet.index(char) * (len(alphabet) ** (len(base) - i))
+    return n  
 
 def aaseq2mers(seq, kmer, step, aminoset=set(aminos)):
     """Kmers generator for amino seq"""
@@ -139,7 +138,8 @@ def db_seq_parser(cur, cmd, verbose):
     if verbose:
         sys.stderr.write(" %s letters in"%seqlen)
         
-def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', verbose=1):
+def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', verbose=1, \
+                   tmpfiles=1000):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
@@ -152,16 +152,14 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', verbose=1):
         keylen   = 2
     alphabetset = set(alphabet)
     #open tempfile for each two first aminos
-    files = {} 
-    for i in xrange(len(alphabet)**keylen):
-        files[int2mer(i, alphabet, keylen)] = tempfile.TemporaryFile(dir=os.path.curdir)
+    files = [tempfile.TemporaryFile(dir=tmpdir) for i in xrange(tmpfiles)]
     #hash sequences
     i = 0
     for i, seqid, seq in parser:
         if verbose and not i%10e2:
             sys.stderr.write(" %s\r" % i)
         for mer in seq2mers(seq, kmer, step, alphabetset):
-            files[mer[:keylen]].write("%s\t%s\n"%(mer, seqid))
+            files[decode(mer, alphabet)%len(files)].write("%s\t%s\n"%(mer, seqid))
     #get seqlimit
     seqlimit = int(kmerfrac * i / 100)
     sys.stderr.write(" %s sequences.\n Setting seqlimit to: %s\n"%(i, seqlimit))
@@ -170,7 +168,7 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', verbose=1):
 def parse_tempfiles(files, seqlimit, dtype, verbose=1):
     """Generator of mer, protids from each tempfile"""
     i = discarded = 0
-    for f in files.itervalues():
+    for f in files:#.itervalues():
         f.flush()
         f.seek(0)
         mer2protids = {}
