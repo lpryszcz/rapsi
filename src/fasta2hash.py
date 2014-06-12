@@ -190,11 +190,10 @@ def parse_tempfiles(files, seqlimit, dtype, verbose=1):
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
             
 def upload(files, db, host, user, pswd, table, seqlimit, dtype,  \
-           notempfile=0, tmpdir="./", verbose=1, sep = "..|..", end = "..|.\n"):
+           notempfile=0, tmpdir="./", verbose=1, sep = r"..|..", end = r"..|.\n"):
     """Load to database, optionally through tempfile."""
-    args = ["mysql", "-h", host, "-u", user, db, "-e", \
-            """LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY
-            '%s' LINES TERMINATED BY '%s'"""%(table, sep, end), "-vvv"]
+    args = ["mysql", "-vvv", "-h", host, "-u", user, db, "-e", \
+            "LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY '%s' LINES TERMINATED BY '%s'"%(table, sep, end)]
     if pswd:
         args.append("-p%s"%pswd)
     #write to mysql directly
@@ -224,7 +223,7 @@ def upload(files, db, host, user, pswd, table, seqlimit, dtype,  \
     #start subprocess uploading the data
     if not notempfile:
         #upload from tempfile, instead stdin
-        args[7] = args[7].replace('/dev/stdin', out.name)
+        args[8] = args[8].replace('/dev/stdin', out.name)
         if verbose:
             info = "[%s] Uploading to database...\n %s\n"
             sys.stderr.write(info%(datetime.ctime(datetime.now()), \
