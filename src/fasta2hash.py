@@ -113,13 +113,13 @@ def fasta_parser(fastas, cur, verbose):
             handle = open(fn)
         #parse entries
         for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
-            if i>100000: break
+            if i>10000: break
             seqlen += len(seq)
             cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",\
                         (i, fi, offset, elen))
             yield i, i, seq
     if verbose:
-        sys.stderr.write(" %s letters in %s sequences\n"%(seqlen, i))
+        sys.stderr.write(" %s letters in"%seqlen)
     #fill metadata
     cur.executemany("INSERT INTO meta_data VALUES (?, ?)",\
                     (('count', i),('format','fasta'),('dblength',seqlen)))
@@ -137,9 +137,9 @@ def db_seq_parser(cur, cmd, verbose):
         seqlen += len(seq)
         yield i, seqid, seq
     if verbose:
-        sys.stderr.write(" %s letters in %s sequences\n"%(seqlen, i))
+        sys.stderr.write(" %s letters in"%seqlen)
         
-def hash_sequences(parser, kmer, step, dna, verbose, tmpdir='/tmp'):
+def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', verbose=1):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
@@ -162,9 +162,12 @@ def hash_sequences(parser, kmer, step, dna, verbose, tmpdir='/tmp'):
             sys.stderr.write(" %s\r" % i)
         for mer in seq2mers(seq, kmer, step, alphabetset):
             files[mer[:keylen]].write("%s\t%s\n"%(mer, seqid))
-    return files, i
+    #get seqlimit
+    seqlimit = int(kmerfrac * i / 100)
+    sys.stderr.write(" %s sequences.\n Setting seqlimit to: %s\n"%(i, seqlimit))
+    return files, seqlimit
     
-def parse_tempfiles(files, seqlimit, verbose=1):
+def parse_tempfiles(files, seqlimit, dtype, verbose=1):
     """Generator of mer, protids from each tempfile"""
     i = discarded = 0
     for f in files.itervalues():
@@ -173,50 +176,77 @@ def parse_tempfiles(files, seqlimit, verbose=1):
         mer2protids = {}
         for l in f:
             mer, protid = l[:-1].split('\t')
-            if mer in mer2protids:
-                if mer2protids[mer]:
-                    mer2protids[mer].append(protid)
-                    if len(mer2protids[mer]) > seqlimit:
-                        mer2protids[mer] = None
-                        discarded += 1
-            else:
+            if mer not in mer2protids:
                 mer2protids[mer] = [protid]
+            mer2protids[mer].append(protid)
         for i, (mer, protids) in enumerate(mer2protids.iteritems(), i+1):
             if not i%10000:
                 sys.stderr.write("  %s \r"%i)
-            yield mer, protids
+            if len(protids) > seqlimit:
+                discarded += 1
+                continue
+            yield mer, buffer(np.array(protids, dtype=dtype).tostring())
     info = " %s hash uploaded; discarded: %s; memory: %s MB\n"
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
             
-def upload(files, db, host, user, pswd, table, seqlimit, dtype, verbose, \
-           sep = "..|..", end = "..|.\n"):
-    """Load to database."""
-    args = ["mysql", "-vvv", "-h", host, "-u", user, db, "-e", \
-            "LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY '%s' LINES TERMINATED BY '%s'"%(table, sep, end)]
-    if verbose:
-        info = "[%s] Uploading to database...\n %s\n" 
-        sys.stderr.write(info%(datetime.ctime(datetime.now()), " ".join(args)))
+def upload(files, db, host, user, pswd, table, seqlimit, dtype,  \
+           notempfile=0, tmpdir="./", verbose=1, sep = "..|..", end = "..|.\n"):
+    """Load to database, optionally through tempfile."""
+    args = ["mysql", "-h", host, "-u", user, db, "-e", \
+            """LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY
+            '%s' LINES TERMINATED BY '%s'"""%(table, sep, end), "-vvv"]
     if pswd:
         args.append("-p%s"%pswd)
-    proc = subprocess.Popen(args, stdin=subprocess.PIPE, stderr=sys.stderr)
-    out  = proc.stdin
-    i = discarded = 0
-    for i, (mer, protids) in enumerate(parse_tempfiles(files, seqlimit), 1):
-        if not protids:
-            discarded += 1
-            continue
-        out.write("%s%s%s%s"%(mer, sep, np.array(protids, dtype=dtype).tostring(), end))
-        if verbose and not i%10000:
-            sys.stderr.write("  %s processed; %s discarded\r" % (i, discarded))
-    return i, discarded
-        
+    #write to mysql directly
+    if notempfile:
+        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, \
+                             stderr=subprocess.PIPE)
+        out = p.stdin
+        if verbose:
+            info = "[%s] Uploading directly to database...\n %s\n"
+            sys.stderr.write(info%(datetime.ctime(datetime.now()), \
+                                   " ".join(filter(lambda x: not x.startswith("-p"), args))))
+    #or through tempfile
+    else:
+        out = tempfile.NamedTemporaryFile(dir=tmpdir, delete=0)
+        if verbose:
+            info = "[%s] Storing to tempfile: %s ...\n"
+            sys.stderr.write(info%(datetime.ctime(datetime.now()), out.name))
+    #write to out
+    try:
+        out.write("".join("%s%s%s%s"%(mer, sep, protids, end)
+                          for mer, protids in parse_tempfiles(files, seqlimit, dtype)))
+        #close out
+        out.close()
+    #with exception catching
+    except Exception, e:
+        sys.stderr.write("[ERROR] %s\n"%str(e))
+    #start subprocess uploading the data
+    if not notempfile:
+        #upload from tempfile, instead stdin
+        args[7] = args[7].replace('/dev/stdin', out.name)
+        if verbose:
+            info = "[%s] Uploading to database...\n %s\n"
+            sys.stderr.write(info%(datetime.ctime(datetime.now()), \
+                                   " ".join(filter(lambda x: not x.startswith("-p"), args))))
+        #upload tmpfile
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    #wait to finish & check return code
+    p.wait()
+    if p.returncode:
+        info = "[WARNING] Likely error on data upload:\n%s\n"
+        sys.stderr.write(info%"\n".join(p.stderr.readlines()))
+        if not notempfile:
+            sys.stderr.write("NOTE: You can reuse the temp file: %s !\n"%out.name)
+    elif not notempfile:
+        os.unlink(out.name)
+                          
 def batch_insert(files, cur, table, seqlimit, verbose, dtype="uint32", rep="?"):
     """Insert to database."""
     if verbose:
         sys.stderr.write("[%s] Uploading...\n"%datetime.ctime(datetime.now()))
     cmd = 'INSERT INTO %s VALUES (%s, %s)'%(table, rep, rep)
-    cur.executemany(cmd, ((mer, buffer(np.array(protids, dtype=dtype).tostring())) \
-                    for mer, protids in parse_tempfiles(files, seqlimit) if protids))
+    cur.executemany(cmd, parse_tempfiles(files, seqlimit, dtype))
     #commit
     cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
     cur.connection.commit()
@@ -292,10 +322,12 @@ def main():
                         help="overwrite table if exists")
     parser.add_argument("-s", "--step",       default=1, type=int, 
                         help="hash steps      [%(default)s]")
-    parser.add_argument("--kmerfrac",         default=0.01, type=float, 
+    parser.add_argument("--kmerfrac",         default=0.05, type=float, 
                         help="ignore kmers present in more than [%(default)s] percent targets")
     parser.add_argument("--dna",              default=False, action='store_true',
                         help="DNA alphabet    [amino acids]")
+    parser.add_argument("--tmpdir",           default="./",
+                        help="temp directory  [%(default)s]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
                         help="database        [%(default)s]")
@@ -312,6 +344,8 @@ def main():
                         help="cmd to get protid, seq from db [%(default)s]")
     mysqlo.add_argument("--dtype",            default="uint32", 
                         help="numpy data type for protids [%(default)s] ie. S8 for VARCHAR(8) or uint16 for SMALLINT UNSIGNED")
+    mysqlo.add_argument("--notempfile",       default=False, action="store_true", 
+                        help="direct upload (without temp file); NOTE: this may cause MySQL time-out on some servers")
                         
     o = parser.parse_args()
     if o.verbose:
@@ -324,9 +358,8 @@ def main():
         #get parser
         parser = fasta_parser(o.input, cur, o.verbose)
         #hash seqs
-        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose, \
-                                        o.tmpdir)
-        seqlimit = o.kmerfrac * targets / 100
+        files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
+                                         o.tmpdir, o.verbose)
         #upload
         batch_insert(files, cur, o.table, seqlimit, o.verbose)
     else:
@@ -340,11 +373,11 @@ def main():
         #get parser
         parser = db_seq_parser(cur, o.cmd, o.verbose)
         #hash seqs
-        files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose, \
-                                        o.tmpdir)
-        seqlimit = o.kmerfrac * targets / 100
+        files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
+                                         o.tmpdir, o.verbose)
         #upload
-        upload(files, o.db, o.host, o.user, pswd, o.table, seqlimit, o.dtype, o.verbose)
+        upload(files, o.db, o.host, o.user, pswd, o.table, seqlimit, o.dtype, \
+               o.notempfile, o.tmpdir, o.verbose)
         #batch_insert(files, cur, o.table, seqlimit, o.verbose, o.dtype, "%s")
     
 if __name__=='__main__': 
