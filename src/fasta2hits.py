@@ -80,7 +80,6 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
         sys.stderr.write(info % (len("".join(qseqs)), len(qseqs)))
     kmers = [] #set()
     for qseq in qseqs:
-        #kmers = kmers.union(seq2mers(qseq, kmer, step))
         kmers.append(seq2mers(qseq, kmer, step))
     if verbose:
         sys.stderr.write("  %s mers\n"%sum(len(x) for x in kmers))

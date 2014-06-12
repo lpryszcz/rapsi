@@ -48,12 +48,6 @@ def decode(base, alphabet, n=0):
     for i, char in enumerate(base, 1):
         n += alphabet.index(char) * (len(alphabet) ** (len(base) - i))
     return n  
-
-def aaseq2mers1(seq, kmer, step, aminoset=set(aminos)):
-    """Kmers generator for amino seq.
-    It's 5x faster without issuperset testing!"""
-    return set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step) \
-               if aminoset.issuperset(seq[s:s+kmer]))
                    
 def aaseq2mers(seq, kmer, step, aminoset=set(aminos)):
     """Kmers generator for amino seq"""
@@ -68,8 +62,6 @@ def dnaseq2mers(seq, kmer, step, nucleotideset=set(nucleotides)):
     mers = set()
     for s in xrange(0, len(seq)-kmer, step):
         mer = seq[s:s+kmer]
-        #if not nucleotideset.issuperset(mer):
-        #    continue
         #store reverse complement
         if mer > reverse_complement(mer):
             mer = reverse_complement(mer)
@@ -116,7 +108,7 @@ def fasta_parser(fastas, cur, verbose):
             handle = open(fn)
         #parse entries
         for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
-            #if i>10000: break
+            #if i>100000: break
             seqlen += len(seq)
             cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",\
                         (i, fi, offset, elen))
@@ -149,15 +141,17 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     if dna:
         alphabet = nucleotides
         seq2mers = dnaseq2mers
+        merspace = len(alphabet)**kmer/2 #reverse complement
     else:
         alphabet = aminos
         seq2mers = aaseq2mers
+        merspace = len(alphabet)**kmer
     alphabetset = set(alphabet)
     #open tempfiles
     files = [tempfile.TemporaryFile(dir=tmpdir) for i in xrange(tmpfiles)]
     #and link every possible kmer to file - should pay off 
     mer2file = {} #py2.6 compatible
-    for i in xrange(len(alphabet)**kmer):
+    for i in xrange(merspace):
         mer2file[encode(i, alphabet, 5)] = files[i%len(alphabet)]
     #hash sequences
     i = 0
@@ -165,11 +159,10 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
         if verbose and not i%10e2:
             sys.stderr.write(" %s\r" % i)
         for mer in seq2mers(seq, kmer, step, alphabetset):
-            try:
-                mer2file[mer].write("%s\t%s\n"%(mer, seqid))
-            #skip on wrong k-mers
-            except:
-                pass
+            #catch wrong kmers
+            #if mer in mer2file:
+            try: mer2file[mer].write("%s\t%s\n"%(mer, seqid))
+            except: pass
     #get seqlimit
     seqlimit = int(kmerfrac * i / 100)
     info = " %s sequences [memory: %s MB]\n Setting seqlimit to: %s\n"
