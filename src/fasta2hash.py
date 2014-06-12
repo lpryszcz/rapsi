@@ -112,7 +112,7 @@ def fasta_parser(fastas, cur, verbose):
             handle = open(fn)
         #parse entries
         for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
-            if i>10000: break
+            if i>100000: break
             seqlen += len(seq)
             cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",\
                         (i, fi, offset, elen))
@@ -138,37 +138,40 @@ def db_seq_parser(cur, cmd, verbose):
     if verbose:
         sys.stderr.write(" %s letters in"%seqlen)
         
-def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', verbose=1, \
-                   tmpfiles=1000):
+def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
+                   tmpfiles=1000, verbose=1):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
         alphabet = nucleotides
         seq2mers = dnaseq2mers
-        keylen   = 4
     else:
         alphabet = aminos
         seq2mers = aaseq2mers
-        keylen   = 2
     alphabetset = set(alphabet)
-    #open tempfile for each two first aminos
+    #open tempfiles
     files = [tempfile.TemporaryFile(dir=tmpdir) for i in xrange(tmpfiles)]
+    #and link every possible kmer to file - should pay off 
+    mer2file = {} #py2.6 compatible
+    for i in xrange(len(alphabet)**kmer):
+        mer2file[encode(i, alphabet, 5)] = files[i%len(alphabet)]
     #hash sequences
     i = 0
     for i, seqid, seq in parser:
         if verbose and not i%10e2:
             sys.stderr.write(" %s\r" % i)
         for mer in seq2mers(seq, kmer, step, alphabetset):
-            files[decode(mer, alphabet)%len(files)].write("%s\t%s\n"%(mer, seqid))
+            mer2file[mer].write("%s\t%s\n"%(mer, seqid))
     #get seqlimit
     seqlimit = int(kmerfrac * i / 100)
-    sys.stderr.write(" %s sequences.\n Setting seqlimit to: %s\n"%(i, seqlimit))
+    info = " %s sequences [memory: %s MB]\n Setting seqlimit to: %s\n"
+    sys.stderr.write(info%(i, memory_usage(), seqlimit))
     return files, seqlimit
     
 def parse_tempfiles(files, seqlimit, dtype, verbose=1):
     """Generator of mer, protids from each tempfile"""
     i = discarded = 0
-    for f in files:#.itervalues():
+    for f in files: #.itervalues():
         f.flush()
         f.seek(0)
         mer2protids = {}
@@ -184,7 +187,7 @@ def parse_tempfiles(files, seqlimit, dtype, verbose=1):
                 discarded += 1
                 continue
             yield mer, buffer(np.array(protids, dtype=dtype).tostring())
-    info = " %s hash uploaded; discarded: %s; memory: %s MB\n"
+    info = " %s hash uploaded; discarded: %s [memory: %s MB]\n"
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
             
 def upload(files, db, host, user, pswd, table, seqlimit, dtype,  \
@@ -325,6 +328,8 @@ def main():
                         help="DNA alphabet    [amino acids]")
     parser.add_argument("--tmpdir",           default="./",
                         help="temp directory  [%(default)s]")
+    parser.add_argument("--tempfiles",        default=1000, type=int, 
+                        help="temp files no.  [%(default)s]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
                         help="database        [%(default)s]")
@@ -356,7 +361,7 @@ def main():
         parser = fasta_parser(o.input, cur, o.verbose)
         #hash seqs
         files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
-                                         o.tmpdir, o.verbose)
+                                         o.tmpdir, o.tempfiles, o.verbose)
         #upload
         batch_insert(files, cur, o.table, seqlimit, o.verbose)
     else:
@@ -371,7 +376,7 @@ def main():
         parser = db_seq_parser(cur, o.cmd, o.verbose)
         #hash seqs
         files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
-                                         o.tmpdir, o.verbose)
+                                         o.tmpdir, o.tempfiles, o.verbose)
         #upload
         upload(files, o.db, o.host, o.user, pswd, o.table, seqlimit, o.dtype, \
                o.notempfile, o.tmpdir, o.verbose)
