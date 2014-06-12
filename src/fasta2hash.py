@@ -113,7 +113,7 @@ def fasta_parser(fastas, cur, verbose):
             handle = open(fn)
         #parse entries
         for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
-            #if i>100000: break
+            if i>10000: break
             seqlen += len(seq)
             cur.execute("INSERT INTO offset_data VALUES (?, ?, ?, ?)",\
                         (i, fi, offset, elen))
@@ -138,7 +138,7 @@ def db_seq_parser(cur, cmd, verbose):
     if verbose:
         sys.stderr.write(" %s letters in %s sequences\n"%(seqlen, i))
         
-def hash_sequences(parser, kmer, step, dna, verbose, tmpdir='/tmp'):
+def hash_sequences0(parser, kmer, step, dna, verbose, tmpdir='/tmp'):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
@@ -164,6 +164,57 @@ def hash_sequences(parser, kmer, step, dna, verbose, tmpdir='/tmp'):
     sys.stderr.write(" %s [memory: %s MB]      \n" % (i, memory_usage()))
     return files, i
 
+def hash_sequences(parser, kmer, step, dna, verbose, cur, table, kmerfrac, \
+                   tmpdir="./", dtype="uint32", rep='?'):
+    """Parse input fasta and generate hash table."""
+    #get alphabet
+    if dna:
+        alphabet = nucleotides
+        seq2mers = dnaseq2mers
+    else:
+        alphabet = aminos
+        seq2mers = aaseq2mers
+    alphabetset = set(alphabet)
+    #open tempfile for each two first aminos
+    tmpdb = os.path.join(tmpdir, 'test_pid%s.db3'%os.getpid())
+    cnx = sqlite3.connect(tmpdb)
+    cur2 = cnx.cursor()
+    cur2.execute("PRAGMA synchronous=OFF")
+    cur2.execute("PRAGMA journal_mode=MEMORY")
+    cur2.execute("CREATE TABLE `%s_tmp` (hash CHAR(%s), protid BLOB)"%(table, kmer))
+    #hash sequences
+    i = 0
+    cmd = "INSERT INTO `%s_tmp` (hash, protid) VALUES (%s, %s)"%(table, rep, rep)
+    for i, protid, seq in parser:
+        if verbose and not i%1e3:
+            sys.stderr.write(" %s [memory: %s MB]     \r" % (i, memory_usage()))
+        cur2.executemany(cmd, ((mer, protid) for mer in \
+                               seq2mers(seq, kmer, step, alphabetset)))
+    sys.stderr.write(" %s [memory: %s MB]      \n" % (i, memory_usage()))
+    seqlimit = int(kmerfrac * i / 100)
+    if verbose:
+        info = "[%s] Collapsing mers found in less than %s [%s%s] sequences ...\n"
+        sys.stderr.write(info%(datetime.ctime(datetime.now()), seqlimit, kmerfrac, '%'))
+    #cmd = """CREATE TABLE `%s` AS SELECT hash, GROUP_CONCAT(protid, '') protids
+    #         FROM `%s_tmp` GROUP BY hash""" % (table, table)
+    cmd = "SELECT hash, GROUP_CONCAT(protid, ' ') FROM `%s_tmp` GROUP BY hash"%table
+    cur2.execute(cmd)
+    if verbose:
+        sys.stderr.write("[%s] Inserting...\n"%datetime.ctime(datetime.now()))
+    cmd = 'INSERT INTO %s VALUES (%s, %s)'%(table, rep, rep)
+    cur.executemany(cmd, ((mer, np.array(protids.split(), dtype=dtype).tostring()) 
+                          for mer, protids in cur2.fetchall() 
+                          if protids.count(' ') + 1 < seqlimit))
+    if verbose:
+        sys.stderr.write("[%s] Indexing...\n"%datetime.ctime(datetime.now()))
+    cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
+    if verbose:
+        sys.stderr.write("[%s] Cleaning-up...\n"%datetime.ctime(datetime.now()))
+    '''cur.execute("DROP TABLE `%s_tmp`"%table)
+    if rep=="?":
+        cur.execute("VACUUM")'''
+    os.unlink(tmpdb)
+    
 def parse_tempfiles(files, seqlimit, verbose=1):
     """Generator of mer, protids from each tempfile"""
     i = discarded = 0
@@ -318,11 +369,14 @@ def main():
         cur = dbConnect_sqlite(o.db, o.table, o.kmer, o.verbose, o.replace)
         #get parser
         parser = fasta_parser(o.input, cur, o.verbose)
+        hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose, cur, o.table, \
+                       o.kmerfrac, o.tmpdir)
+        '''
         #hash seqs
         files, targets = hash_sequences(parser, o.kmer, o.step, o.dna, o.verbose, o.tmpdir)
         seqlimit = o.kmerfrac * targets / 100
         #upload
-        batch_insert(files, cur, o.table, seqlimit, o.verbose)
+        batch_insert(files, cur, o.table, seqlimit, o.verbose)'''
     else:
         #prompt for mysql passwd
         pswd = o.pswd
