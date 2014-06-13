@@ -26,7 +26,7 @@ import MySQLdb, MySQLdb.cursors, sqlite3, tempfile
 import numpy as np
 from datetime import datetime
 from Bio import SeqIO, bgzf
-from multiprocessing import Pool
+from multiprocessing import Pool, Process, Queue
 
 aminos = 'ACDEFGHIKLMNPQRSTVWY'
 aminoset = set(aminos)
@@ -172,46 +172,52 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     sys.stderr.write(info%(i, memory_usage(), seqlimit))
     return files, seqlimit
     
-def worker(args):
-    """Tempfile parsing worker"""
-    fn, dtype, seqlimit = args
-    mer2protids = {}
-    for l in open(fn):
-        mer, protid = l[:-1].split('\t')
-        if mer in mer2protids:
-            if mer2protids[mer]:
-                mer2protids[mer].append(protid)
-                if len(mer2protids[mer])>seqlimit:
-                    mer2protids[mer] = []
-        else:
-            mer2protids[mer] = [protid]
-    #remove tmp file
-    os.unlink(fn)
-    #convert to np.array compressed string representation
-    for mer in mer2protids.keys():
-        mer2protids[mer] = np.array(mer2protids[mer], dtype=dtype).tostring()
-    return mer2protids
+def worker(inQ, outQ, dtype, seqlimit): 
+    """Tempfile parsing worker."""
+    for fn in iter(inQ.get, None):
+        mer2protids = {}
+        for l in open(fn):
+            mer, protid = l[:-1].split('\t')
+            if mer in mer2protids:
+                if mer2protids[mer]:
+                    mer2protids[mer].append(protid)
+                    if len(mer2protids[mer])>seqlimit:
+                        mer2protids[mer] = []
+            else:
+                mer2protids[mer] = [protid]
+        #convert to np.array compressed string representation
+        for mer, protids in mer2protids.iteritems():
+            outQ.put((mer, np.array(protids, dtype=dtype).tostring()))
+        #remove tmp file
+        os.unlink(fn)
+    outQ.put(None)
 
 def parse_tempfiles(files, seqlimit, dtype, nprocs=4, verbose=1):
     """Generator of mer, protids from each tempfile"""
-    #close tempfiles and populated fnames
-    fnames = []
+    inQ, outQ = Queue(), Queue(100000)
+    #populate inQ
     for f in files:
         f.close()
-        fnames.append((f.name, dtype, seqlimit))
-    #start pool
-    pool = Pool(nprocs)
+        inQ.put(f.name)
+    #start workers
+    for i in range(nprocs):
+        Process(target=worker, args=(inQ, outQ, dtype, seqlimit)).start()
+        inQ.put(None)
     #process pool output
-    i = discarded = 0
-    dtype = np.dtype(dtype)
-    for mer2protids in pool.imap_unordered(worker, fnames):
-        for i, (mer, protids) in enumerate(mer2protids.iteritems(), i+1):
-            if not i%10000:
-                sys.stderr.write("  %s [memory: %s MB]   \r"%(i, memory_usage()))
-            if not protids: #len(protids) > seqlimit*dtype.itemsize:
-                discarded += 1
-                continue
-            yield mer, buffer(protids)
+    i = discarded = stop = 0
+    for i, data in enumerate(iter(outQ.get, 1), 1-nprocs):
+        if not data:
+            stop += 1
+            if stop==nprocs:
+                break
+            continue
+        (mer, protids) = data
+        if not i%10000:
+            sys.stderr.write("  %s [memory: %s MB]   \r"%(i, memory_usage()))
+        if not protids:
+            discarded += 1
+            continue
+        yield mer, buffer(protids)
     info = " %s hash uploaded; discarded: %s [memory: %s MB]\n"
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
                 
