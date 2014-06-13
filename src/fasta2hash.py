@@ -110,10 +110,10 @@ def fasta_parser(fastas, cur, verbose):
             handle = open(fn)
         #parse entries
         for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
-            if i>10000: break
+            #if i>10000: break
             seqlen += len(seq)
             cur.execute(cmd, (i, fi, offset, elen))
-            yield i, i, seq
+            yield i, seq
     if verbose:
         sys.stderr.write(" %s letters in"%seqlen)
     #fill metadata
@@ -129,14 +129,14 @@ def db_seq_parser(cur, cmd, verbose):
         sys.stderr.write("[%s] Hashing sequences...\n"%datetime.ctime(datetime.now()))
     seqlen = 0
     #parse seqs
-    for i, (seqid, seq) in enumerate(cur, 1):
+    for seqid, seq in cur:
         seqlen += len(seq)
-        yield i, seqid, seq
+        yield seqid, seq
     if verbose:
         sys.stderr.write(" %s letters in"%seqlen)
         
 def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
-                   tmpfiles=1000, verbose=1, nprocs=4):
+                   tmpfiles=1000, verbose=1):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
@@ -157,13 +157,11 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     mer2file = {} #py2.6 compatible
     for i in xrange(merspace):
         mer2file[encode(i, alphabet, 5)] = files[i%len(alphabet)]
-    #start pool
-    pool = Pool(nprocs)
     #hash sequences
     i = 0
-    for i, seqid, seq in parser:
-        if verbose and not i%1e4:
-            sys.stderr.write(" %s\r" % i)
+    for i, (seqid, seq) in enumerate(parser, 1):
+        if verbose and not i%1e3:
+            sys.stderr.write(" %s\r"%i)
         for mer in seq2mers(seq, kmer, step, alphabetset):
             #catch wrong kmers
             if mer in mer2file:
@@ -176,14 +174,18 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     
 def worker(args):
     """Tempfile parsing worker"""
-    fn, dtype = args
+    fn, dtype, seqlimit = args
     mer2protids = {}
     for l in open(fn):
         mer, protid = l[:-1].split('\t')
         if mer in mer2protids:
-            mer2protids[mer].append(protid)
+            if mer2protids[mer]:
+                mer2protids[mer].append(protid)
+                if len(mer2protids[mer])>seqlimit:
+                    mer2protids[mer] = []
         else:
             mer2protids[mer] = [protid]
+    #remove tmp file
     os.unlink(fn)
     #convert to np.array compressed string representation
     for mer in mer2protids.keys():
@@ -196,7 +198,7 @@ def parse_tempfiles(files, seqlimit, dtype, nprocs=4, verbose=1):
     fnames = []
     for f in files:
         f.close()
-        fnames.append((f.name, dtype))
+        fnames.append((f.name, dtype, seqlimit))
     #start pool
     pool = Pool(nprocs)
     #process pool output
@@ -206,7 +208,7 @@ def parse_tempfiles(files, seqlimit, dtype, nprocs=4, verbose=1):
         for i, (mer, protids) in enumerate(mer2protids.iteritems(), i+1):
             if not i%10000:
                 sys.stderr.write("  %s [memory: %s MB]   \r"%(i, memory_usage()))
-            if len(protids) > seqlimit*dtype.itemsize:
+            if not protids: #len(protids) > seqlimit*dtype.itemsize:
                 discarded += 1
                 continue
             yield mer, buffer(protids)
@@ -262,7 +264,6 @@ def upload(files, db, host, user, pswd, table, seqlimit, dtype, nprocs, \
         if not notempfile:
             sys.stderr.write("NOTE: You can reuse the temp file: %s !\n"%out.name)
     elif not notempfile:
-        #sys.stderr.write("You can remove tempfile: %s\n"%out.name)
         os.unlink(out.name)
                           
 def batch_insert(files, cur, table, seqlimit, nprocs, verbose, \
