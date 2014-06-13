@@ -26,7 +26,7 @@ import MySQLdb, MySQLdb.cursors, sqlite3, tempfile
 import numpy as np
 from datetime import datetime
 from Bio import SeqIO, bgzf
-from multiprocessing import Pool, Process, Queue
+from multiprocessing import Pool
 
 aminos = 'ACDEFGHIKLMNPQRSTVWY'
 aminoset = set(aminos)
@@ -136,7 +136,7 @@ def db_seq_parser(cur, cmd, verbose):
         sys.stderr.write(" %s letters in"%seqlen)
         
 def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
-                   tmpfiles=1000, verbose=1):
+                   tmpfiles=1000, verbose=1, nprocs=4):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
@@ -157,10 +157,12 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     mer2file = {} #py2.6 compatible
     for i in xrange(merspace):
         mer2file[encode(i, alphabet, 5)] = files[i%len(alphabet)]
+    #start pool
+    pool = Pool(nprocs)
     #hash sequences
     i = 0
     for i, seqid, seq in parser:
-        if verbose and not i%10e2:
+        if verbose and not i%1e4:
             sys.stderr.write(" %s\r" % i)
         for mer in seq2mers(seq, kmer, step, alphabetset):
             #catch wrong kmers
@@ -172,85 +174,45 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     sys.stderr.write(info%(i, memory_usage(), seqlimit))
     return files, seqlimit
     
-def worker(inQ, outQ, dtype):
+def worker(args):
     """Tempfile parsing worker"""
-    #fn, dtype = args
-    for fn in iter(inQ.get, None):
-        mer2protids = {}
-        for l in open(fn):
-            mer, protid = l[:-1].split('\t')
-            if mer in mer2protids:
-                mer2protids[mer].append(protid)
-            else:
-                mer2protids[mer] = [protid]
-        os.unlink(fn)
-        #convert to np.array compressed string representation
-        for mer, protids in mer2protids.iteritems():
-            #mer2protids[mer] = np.array(protids, dtype=dtype).tostring()
-            outQ.put((mer, np.array(protids, dtype=dtype).tostring()))
-    outQ.put(None)
-    #return mer2protids
+    fn, dtype = args
+    mer2protids = {}
+    for l in open(fn):
+        mer, protid = l[:-1].split('\t')
+        if mer in mer2protids:
+            mer2protids[mer].append(protid)
+        else:
+            mer2protids[mer] = [protid]
+    os.unlink(fn)
+    #convert to np.array compressed string representation
+    for mer in mer2protids.keys():
+        mer2protids[mer] = np.array(mer2protids[mer], dtype=dtype).tostring()
+    return mer2protids
 
 def parse_tempfiles(files, seqlimit, dtype, nprocs=4, verbose=1):
     """Generator of mer, protids from each tempfile"""
     #close tempfiles and populated fnames
-    #fnames = []
-    inQ, outQ = Queue(), Queue()#10000)
+    fnames = []
     for f in files:
         f.close()
-        inQ.put(f.name)
-        #fnames.append((f.name, dtype))
-    for i in range(nprocs):
-        inQ.put(None)
-        Process(target=worker, args=(inQ, outQ, dtype)).start()
+        fnames.append((f.name, dtype))
     #start pool
-    #pool = Pool(nprocs)
+    pool = Pool(nprocs)
     #process pool output
-    i = discarded = stop = 0
-    dtype = np.dtype(dtype)
-    '''for mer2protids in pool.imap_unordered(worker, fnames):
-        for i, (mer, protids) in enumerate(mer2protids.iteritems(), i+1):'''
-    for i, data in enumerate(iter(outQ.get, 1), 1):
-        if not data:
-            stop += 1
-            i -= 1
-            if stop == nprocs:
-                break
-        (mer, protids) = data
-        if not i%10000:
-            sys.stderr.write("  %s [memory: %s MB]   \r"%(i, memory_usage()))
-        if len(protids) > seqlimit*dtype.itemsize:
-            discarded += 1
-            continue
-        yield mer, buffer(protids)
-    info = " %s hash uploaded; discarded: %s [memory: %s MB]\n"
-    sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
-    
-def parse_tempfiles0(files, seqlimit, dtype, verbose=1):
-    """Generator of mer, protids from each tempfile"""
     i = discarded = 0
-    for f in files:
-        f.flush()
-        f.seek(0)
-        mer2protids = {}
-        for l in f:
-            mer, protid = l[:-1].split('\t')
-            #store protid
-            if mer in mer2protids:
-                mer2protids[mer].append(protid)
-            else:
-                mer2protids[mer] = [protid]
-        f.close()
+    dtype = np.dtype(dtype)
+    for mer2protids in pool.imap_unordered(worker, fnames):
         for i, (mer, protids) in enumerate(mer2protids.iteritems(), i+1):
             if not i%10000:
                 sys.stderr.write("  %s [memory: %s MB]   \r"%(i, memory_usage()))
-            if len(protids) > seqlimit:
+            if len(protids) > seqlimit*dtype.itemsize:
                 discarded += 1
                 continue
-            yield mer, buffer(np.array(protids, dtype=dtype).tostring())
+            yield mer, buffer(protids)
     info = " %s hash uploaded; discarded: %s [memory: %s MB]\n"
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
-            
+                
 def upload(files, db, host, user, pswd, table, seqlimit, dtype, nprocs, \
            notempfile=0, tmpdir="./", verbose=1, sep = "..|..", end = "..|.\n"):
     """Load to database, optionally through tempfile."""
