@@ -21,7 +21,7 @@ Barcelona/Mizerow, 13/11/2013
 """
 
 import os, sys, time
-import commands, getpass, resource, subprocess
+import commands, gc, getpass, resource, subprocess
 import MySQLdb, MySQLdb.cursors, sqlite3, tempfile
 import numpy as np
 from datetime import datetime
@@ -110,7 +110,7 @@ def fasta_parser(fastas, cur, verbose):
             handle = open(fn)
         #parse entries
         for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
-            #if i>10000: break
+            #if i>10**6: break
             seqlen += len(seq)
             cur.execute(cmd, (i, fi, offset, elen))
             yield i, seq
@@ -174,6 +174,8 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     
 def worker(inQ, outQ, dtype, seqlimit): 
     """Tempfile parsing worker."""
+    #py2.6 path
+    gc.disable()
     for fn in iter(inQ.get, None):
         mer2protids = {}
         for l in open(fn):
@@ -190,6 +192,9 @@ def worker(inQ, outQ, dtype, seqlimit):
             outQ.put((mer, np.array(protids, dtype=dtype).tostring()))
         #remove tmp file
         os.unlink(fn)
+        #garbage collection
+        del mer2protids
+        gc.collect()
     outQ.put(None)
 
 def parse_tempfiles(files, seqlimit, dtype, nprocs=4, verbose=1):
@@ -363,7 +368,7 @@ def main():
                         help="no. of threads  [%(default)s]; NOTE: so far only tempfiles parsing is threaded!")
     parser.add_argument("--tmpdir",           default="./",
                         help="temp directory  [%(default)s]")
-    parser.add_argument("--tempfiles",        default=1000, type=int, 
+    parser.add_argument("--tempfiles",        default=10000, type=int, 
                         help="temp files no.  [%(default)s]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
