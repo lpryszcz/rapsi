@@ -420,7 +420,6 @@ def main():
         #upload
         upload(files, o.db, o.host, o.user, pswd, o.table, seqlimit, o.dtype, \
                o.nprocs, o.notempfile, o.tmpdir, o.verbose)
-        #batch_insert(files, cur, o.table, seqlimit, o.verbose, o.dtype, "%s")
     
 if __name__=='__main__': 
     t0  = datetime.now()

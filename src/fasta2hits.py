@@ -33,7 +33,7 @@ v1.1:
 """
 
 import commands, gzip, math, os, sys, time
-import MySQLdb, resource, sqlite3, tempfile
+import MySQLdb, random, resource, sqlite3, tempfile
 import numpy as np
 from datetime import datetime
 from Bio import SeqIO, bgzf
@@ -70,7 +70,7 @@ def mysql2seq(cur, protids, seqcmd):
     """Return target fasta for protids from mysql."""
     protidstext = "'" + "','".join(str(p) for p in protids) + "'"
     cur.execute(seqcmd%protidstext)
-    return [">%s\n%s\n" % tup for tup in cur.fetchall()]
+    return "".join(">%s\n%s\n"%tup for tup in cur.fetchall())
     
 def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, samplings, \
                 seq2mers, dtype, verbose):
@@ -83,6 +83,7 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
         kmers.append(seq2mers(qseq, kmer, step))
     if verbose:
         sys.stderr.write("  %s mers\n"%sum(len(x) for x in kmers))
+    fprotids = []
     for sampling in samplings:
         mers = []
         for qmers in kmers:
@@ -138,7 +139,7 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
         sys.stderr.write(" Aligning...\n")    
     algs = []
     #prepare files - add timestamp
-    tmpfn = os.path.join(tmpdir, "tmp.%s"%time.time())
+    tmpfn = os.path.join(tmpdir, "tmp.pid%s.%s"%(os.getpid(), time.time()))
     #write query
     tmpq = "%s.query" % tmpfn
     tmpqf = open(tmpq, "w")# as tmpqf:
@@ -147,7 +148,7 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
     tmpqf.close()
     #write targets
     tmpt = "%s.target" % tmpfn
-    tmptf = open(tmpt, "w"); tmptf.write("".join(matches)); tmptf.close()
+    tmptf = open(tmpt, "w"); tmptf.write(matches); tmptf.close()
     #run blat
     tmpr = "%s.out" % tmpfn
     if dna:
@@ -297,7 +298,32 @@ def get_sixframe_translations(r):
             ilen = 3 * ((len(seq)-i) // 3)
             seqs.append(str(seq[i:i+ilen].translate())) 
     return seqs
-    
+
+def get_random_sequence(cur, db, n, nprotids, seqcmd, verbose):
+    """Return n random sequences"""
+    if verbose:
+        sys.stderr.write("Fetching %s random sequences...\n"%n)
+    #get random ids
+    if os.path.isfile(db):
+        protids = random.sample(xrange(1, nprotids+1), n)
+        seqs = sqlite2seq(cur, db, protids)
+    else:
+        #get no. of proteins in MySQL
+        s, e = seqcmd.upper().index('SELECT ')+7, seqcmd.upper().index(' FROM')
+        cmd = seqcmd[:s] + "COUNT(*)" + seqcmd[e:]
+        cur.execute(cmd)
+        nprotids, = cur.fetchone()
+        if verbose:
+            sys.stderr.write(" %s proteins found...\n"%nprotids)
+        #get random ids
+        protids = random.sample(xrange(1, nprotids+1), n)
+        seqs = []
+        for x in protids: 
+            cur.execute(seqcmd+" LIMIT %s, 1"%x)
+            seqs.append(">%s\n%s\n"%cur.fetchone())
+        seqs = "".join(seqs)
+    return seqs
+        
 def main():
     #compatible with Python2.6 without argparse
     import argparse
@@ -328,6 +354,8 @@ def main():
                         help="add html link matches [%(default)s]")
     parser.add_argument("-l", "--limit",     default=0, type=int,
                         help="stop after      [all]")
+    parser.add_argument("--random",          default=0, type=int,
+                        help="return random sequences and exit [%(default)s]")
     similo = parser.add_argument_group('Similarity search options')
     similo.add_argument("-k", "--kmer",      default=5, type=int, 
                         help="hash length     [%(default)s]")
@@ -373,17 +401,27 @@ def main():
         #enable utf8 handling
         cnx.text_factory = str 
         cur = cnx.cursor()
-        #get dblength
+        #get dblength & no. of proteins
         cur.execute("select value from meta_data where key='dblength'")
         o.dblength = int(cur.fetchone()[0])
+        cur.execute("select value from meta_data where key='count'")
+        proteins = int(cur.fetchone()[0])        
         if o.verbose:
-            sys.stderr.write("DB length: %s\n"%o.dblength)
+            sys.stderr.write(" %s letters in %s entries\n"%(o.dblength, proteins))
     else:
         if not o.seqcmd:
-            sys.exit("Sequence command (--seqcmd) needed for MySQL")
+            sys.stderr.write("Sequence command (--seqcmd) needed for MySQL\n")
+            sys.exit(1)
         cnx = MySQLdb.connect(db=o.db, host=o.host, user=o.user, passwd=o.pswd)
         cur = cnx.cursor()
+        proteins = 0
 
+    #return random sequence(s)
+    if o.random:
+        o.output.write(get_random_sequence(cur, o.db, o.random, proteins, \
+                                           o.seqcmd, o.verbose))
+        return
+        
     #handle gz/bz2
     handle = o.input
     seqformatpos = -1
