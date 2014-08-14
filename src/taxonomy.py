@@ -6,6 +6,7 @@ class Taxonomy(object):
     def __init__(self, db):
         self.cnx = sqlite3.connect(db)
         self.cur = self.cnx.cursor()
+        self.taxid2lineage = self.get_lineage
         
     def __getitem__(self, taxid):
         return self.get_taxa_info(taxid)
@@ -29,9 +30,9 @@ class Taxonomy(object):
         else:
             return None
             
-    def taxid2lineage(self, taxid, maxRank="no rank"):
+    def get_lineage(self, taxid, maxRank="root"):
         """Return taxid linneage. Stop after reaching maxRank (root)."""
-        parents = []
+        parents = [taxid]
         rank = ""
         while taxid!=1 and rank!=maxRank:
             taxid, name, rank = self.get_taxa_info(taxid)

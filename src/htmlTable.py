@@ -47,7 +47,7 @@ class htmlTable:
                 continue
             #remove column content
             row.pop(column_index)
-            rows[row_index] = row
+            self.rows[row_index] = row
             #drop formatting classes
             #if self.cell_classes[row_index]:
 
