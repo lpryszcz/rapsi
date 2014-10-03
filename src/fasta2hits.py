@@ -1,17 +1,28 @@
 #!/usr/bin/env python
-desc="""Scan hash table and report matches. 
+desc="""Scan hash table and report matches. For searches for relatively similar
+sequences, sequence sampling is recommended.
+
+PARAMETERS EXAMPLES:
+ --link  "<a target=_blank href='/?q=SeqInfo&seqid=Phy%s'>Phy%s</a>"
+
+python wsgi/fasta2hits.py -vi ../test.fa --host cgenomics.crg.es -uscript -ppython --seqcmd "select concat(p.protid,'_',code), seq from protid2taxid p join protid2seq ps join species s on p.protid=ps.protid and p.taxid=s.taxid where p.protid in (%s)"
+
 """
-epilog="""Author: l.p.pryszcz@gmail.com
+epilog="""Author:
+l.p.pryszcz@gmail.com
+
 Barcelona/Mizerow, 13/11/2013
-"""
-CHANGELOG="""
+
+TO ADD:
+- url input scanning for str threats like ", '
+
+
 CHANGELOG:
-v1.3 (16/06/2014): 
+v1.3:
+- np.array compression (30% reduced hash size)
 - batch query
-- multiple sampling cut-off
 - P & E-value statistics
 - bz2 support
-- get random sequence from database
 v1.2:
 - DNA support
 v1.1:
@@ -19,19 +30,13 @@ v1.1:
 - FastQ, genbank, embl support
 - auto query format recognition
 - BGZIP support
-
-TO ADD:
-- url input scanning for str threats like ", '
 """
 
-import commands, gzip, math, os, resource, sys, tempfile, time
+import commands, gzip, math, os, sys, time
+import MySQLdb, random, resource, sqlite3, tempfile
 import numpy as np
 from datetime import datetime
-from Bio import SeqIO
-try:
-    from Bio import bgzf
-except:
-    sys.stderr.write("[WARNING] No BGZF support. Update Biopython!\n")
+from Bio import SeqIO, bgzf
 from htmlTable import htmlTable
 from fasta2hash import dnaseq2mers, aaseq2mers
         
@@ -289,7 +294,7 @@ def get_sixframe_translations(r):
     """Return list of six-frames translations"""
     seqs = []
     for seq in (r.seq, r.seq.reverse_complement()):
-        for i in range(3):
+        for i in range(3): 
             ilen = 3 * ((len(seq)-i) // 3)
             seqs.append(str(seq[i:i+ilen].translate())) 
     return seqs
@@ -329,8 +334,6 @@ def main():
     seqformats = ['fasta', 'fastq', 'gb', 'genbank', 'embl']
     parser.add_argument("-v", dest="verbose",  default=False, action="store_true", help="verbose")    
     parser.add_argument('--version', action='version', version='%(prog)s 1.3b')   
-    parser.add_argument('--changelog', action='store_true', default=False,
-                        help="print changelog information")   
     parser.add_argument("-i", "--input",     type=file, default=sys.stdin, 
                         help="fasta stream    [stdin]")
     parser.add_argument("-b", "--batch",     type=int, default=1, 
@@ -360,7 +363,7 @@ def main():
                         help="BLAT path       [%(default)s]")
     similo.add_argument("--tmpdir",          default='.', 
                         help="TEMP path       [%(default)s]")
-    similo.add_argument("-s", "--step",       default=1, type=int, 
+    similo.add_argument("-s", "--step",       default=5, type=int, 
                         help="hash steps      [%(default)s]")
     similo.add_argument("--seqlimit",         default=100, type=int, 
                         help="max. seqs to retrieve [%(default)s]")
@@ -392,14 +395,8 @@ def main():
     o = parser.parse_args()
     if o.verbose:
         sys.stderr.write("Options: %s\n"%str(o))
-    #print help + changelog
-    if o.changelog:
-        parser.print_help()
-        sys.stderr.write(CHANGELOG)
-        return
-    #get connection
+        
     if os.path.isfile(o.db):
-        import sqlite3
         cnx = sqlite3.connect(o.db)
         #enable utf8 handling
         cnx.text_factory = str 
@@ -415,7 +412,6 @@ def main():
         if not o.seqcmd:
             sys.stderr.write("Sequence command (--seqcmd) needed for MySQL\n")
             sys.exit(1)
-        import MySQLdb
         cnx = MySQLdb.connect(db=o.db, host=o.host, user=o.user, passwd=o.pswd)
         cur = cnx.cursor()
         proteins = 0

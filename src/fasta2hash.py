@@ -1,35 +1,31 @@
 #!/usr/bin/env python
 desc="""Generate hash table and load it to db.
-"""
-epilog="""Author: l.p.pryszcz@gmail.com
-Barcelona/Mizerow, 13/11/2013
-"""
-CHANGELOG="""
+
 CHANGELOG:
-v1.3 (16/06/2014): 
-- np.array compression (hash size reduced by ~45% for INT protids)
-- kmerfrac instead of exact seqlimit
-- no. of temporary files can be changed - more temp file == lower memory footprint 
-- hashing performance improved:
--- partially threaded hashing: 2x faster on 4 cores 
--- hashing recoded: 1.6x faster
--- reduced memory footprint (~10GB per thread for nr/40+M seqs on 4k temp files; <4GB / thread on 10k temp files)
+v1.3:
+- np.array compression (30% reduced hash size)
+- batch query
+- P & E-value statistics
 v1.2:
 - DNA support
 v1.1:
 - implemented nucleotide query (rapsiX)
+- FastQ, genbank, embl support
+- auto query format recognition
 - BGZIP support
+"""
+epilog="""Author:
+l.p.pryszcz@gmail.com
+
+Barcelona/Mizerow, 13/11/2013
 """
 
 import os, sys, time
-import commands, gc, getpass, resource, subprocess, tempfile
+import commands, gc, getpass, resource, subprocess
+import MySQLdb, MySQLdb.cursors, sqlite3, tempfile
 import numpy as np
 from datetime import datetime
-from Bio import SeqIO
-try:
-    from Bio import bgzf
-except:
-    sys.stderr.write("[WARNING] No BGZF support. Update Biopython!\n")
+from Bio import SeqIO, bgzf
 from multiprocessing import Pool, Process, Queue
 
 aminos = 'ACDEFGHIKLMNPQRSTVWY'
@@ -229,13 +225,63 @@ def parse_tempfiles(files, seqlimit, dtype, nprocs=4, verbose=1):
         yield mer, buffer(protids)
     info = " %s hash uploaded; discarded: %s [memory: %s MB]\n"
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
-                                         
+                
+def upload(files, db, host, user, pswd, table, seqlimit, dtype, nprocs, \
+           notempfile=0, tmpdir="./", verbose=1, sep = "..|..", end = "..|.\n"):
+    """Load to database, optionally through tempfile."""
+    args = ["mysql", "-vvv", "-h", host, "-u", user, db, "-e", \
+            "LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY %s LINES TERMINATED BY %s"%(table, repr(sep), repr(end))]
+    if pswd:
+        args.append("-p%s"%pswd)
+    #write to mysql directly
+    if notempfile:
+        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, \
+                             stderr=subprocess.PIPE)
+        out = p.stdin
+        if verbose:
+            info = "[%s] Uploading directly to database...\n %s\n"
+            sys.stderr.write(info%(datetime.ctime(datetime.now()), \
+                                   " ".join(filter(lambda x: not x.startswith("-p"), args))))
+    #or through tempfile
+    else:
+        out = tempfile.NamedTemporaryFile(dir=tmpdir, delete=0)
+        if verbose:
+            info = "[%s] Storing to tempfile: %s ...\n"
+            sys.stderr.write(info%(datetime.ctime(datetime.now()), out.name))
+    #write to out
+    try:
+        out.write("".join("%s%s%s%s"%(mer, sep, protids, end) for mer, protids in \
+                          parse_tempfiles(files, seqlimit, dtype, nprocs, verbose)))
+        #close out
+        out.close()
+    #with exception catching
+    except Exception, e:
+        sys.stderr.write("[ERROR] %s\n"%str(e))
+    #start subprocess uploading the data
+    if not notempfile:
+        #upload from tempfile, instead stdin
+        args[8] = args[8].replace('/dev/stdin', out.name)
+        if verbose:
+            info = "[%s] Uploading to database...\n %s\n"
+            sys.stderr.write(info%(datetime.ctime(datetime.now()), \
+                                   " ".join(filter(lambda x: not x.startswith("-p"), args))))
+        #upload tmpfile
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    #wait to finish & check return code
+    p.wait()
+    if p.returncode:
+        info = "[WARNING] Likely error on data upload:\n%s\n"
+        sys.stderr.write(info%"\n".join(p.stderr.readlines()))
+        if not notempfile:
+            sys.stderr.write("NOTE: You can reuse the temp file: %s !\n"%out.name)
+    elif not notempfile:
+        os.unlink(out.name)
+                          
 def batch_insert(files, cur, table, seqlimit, nprocs, verbose, \
                  dtype="uint32", rep="?"):
     """Insert to database."""
     if verbose:
         sys.stderr.write("[%s] Uploading...\n"%datetime.ctime(datetime.now()))
-    #bug in MySQLdb versions previous to 1.3 http://stackoverflow.com/a/3945860/632242 VALUES->values
     cmd = 'INSERT INTO %s VALUES (%s, %s)'%(table, rep, rep)
     cur.executemany(cmd, parse_tempfiles(files, seqlimit, dtype, nprocs, verbose))
     #commit
@@ -248,7 +294,6 @@ def dbConnect(db, host, user, pswd, table, kmer, verbose, replace):
     if verbose:
         info = "[%s] Connecting to %s @ %s as %s ...\n"
         sys.stderr.write(info%(datetime.ctime(datetime.now()), db, host, user))
-    import MySQLdb, MySQLdb.cursors
     cnx = MySQLdb.connect(db=db, host=host, user=user, passwd=pswd, \
                           cursorclass=MySQLdb.cursors.SSCursor)
     cur = cnx.cursor()
@@ -264,7 +309,7 @@ def dbConnect(db, host, user, pswd, table, kmer, verbose, replace):
         else:
             sys.exit('Table %s already exists!'%table)
     #create table #index added after compression PRIMARY KEY
-    cmd = 'CREATE TABLE `%s` (`hash` CHAR(%s), `protids` BLOB) ENGINE=MyISAM'%(table, kmer)
+    cmd = 'CREATE TABLE `%s` (`hash` CHAR(%s), `protids` BLOB, INDEX `idx_hash` (hash)) ENGINE=MyISAM'%(table, kmer)
     if verbose:
         sys.stderr.write(" %s\n"%cmd)
     cur.execute(cmd)
@@ -276,7 +321,6 @@ def dbConnect_sqlite(db, table, kmer, verbose, replace):
     if verbose:
         info = "[%s] Preparing sqlite3 database: %s ...\n"
         sys.stderr.write(info%(datetime.ctime(datetime.now()), db))
-    import sqlite3
     #check if db exists
     if os.path.isfile(db):
         #replace or exit
@@ -292,25 +336,22 @@ def dbConnect_sqlite(db, table, kmer, verbose, replace):
     ##bullshit? no time diff
     #asyn execute >50x faster ##http://www.sqlite.org/pragma.html#pragma_synchronous 
     #http://stackoverflow.com/questions/1711631/how-do-i-improve-the-performance-of-sqlite
-    cur.execute("PRAGMA synchronous = OFF")
+    cur.execute("PRAGMA synchronous=OFF")
     cur.execute("PRAGMA journal_mode = MEMORY")
     #prepare tables and indices PRIMARY KEY
     cur.execute("CREATE TABLE meta_data (key TEXT, value TEXT)")
     cur.execute("CREATE TABLE file_data (file_number INTEGER, name TEXT)")
     cur.execute("CREATE TABLE offset_data (key INTEGER PRIMARY KEY, file_number INTEGER, offset INTEGER, length INTEGER)")
-    cur.execute("CREATE TABLE %s (hash CHAR(%s), protids BLOB)"%(table, kmer))
+    cur.execute("CREATE TABLE %s (hash CHAR(%s), protids array)"%(table, kmer))
     return cur
             
 def main():
     import argparse
     usage   = "%(prog)s -v"
-    parser  = argparse.ArgumentParser(usage=usage, description=desc, epilog=epilog, \
-                                      formatter_class=argparse.RawTextHelpFormatter)
+    parser  = argparse.ArgumentParser(usage=usage, description=desc, epilog=epilog)
   
     parser.add_argument("-v", dest="verbose",  default=False, action="store_true", help="verbose")    
     parser.add_argument('--version', action='version', version='1.3b')   
-    parser.add_argument('--changelog', action='store_true', default=False,
-                        help="print changelog information")   
     parser.add_argument("-i", "--input",      nargs="*",
                         help="fasta file(s)   [get seqs from db]")
     parser.add_argument("-k", "--kmer",       default=5, type=int, 
@@ -319,7 +360,7 @@ def main():
                         help="overwrite table if exists")
     parser.add_argument("-s", "--step",       default=1, type=int, 
                         help="hash steps      [%(default)s]")
-    parser.add_argument("--kmerfrac",         default=0.015, type=float, 
+    parser.add_argument("--kmerfrac",         default=0.05, type=float, 
                         help="ignore kmers present in more than [%(default)s] percent targets")
     parser.add_argument("--dna",              default=False, action='store_true',
                         help="DNA alphabet    [amino acids]")
@@ -331,29 +372,27 @@ def main():
                         help="temp files no.  [%(default)s]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
-                        help="database file or name  [%(default)s]")
+                        help="database        [%(default)s]")
     sqlopt.add_argument("-t", "--table",      default='hash2protids',
-                        help="hashtable name         [%(default)s]")
+                        help="hashtable name  [%(default)s]")
     mysqlo = parser.add_argument_group('MySQL options')
     mysqlo.add_argument("-u", "--user",       default="lpryszcz", 
-                        help="database user               [%(default)s]")
+                        help="database user   [%(default)s]")
     mysqlo.add_argument("-p", "--pswd",       default=None, 
-                        help="user password               [will prompt if not specified]")
+                        help="user password   [will prompt if not specified]")
     mysqlo.add_argument("--host",             default='localhost', 
-                        help="database host               [%(default)s]")
+                        help="database host   [%(default)s]")
     mysqlo.add_argument("-c", "--cmd",        default="SELECT protid, seq FROM protid2seq", 
-                        help="cmd to get protid and seq   [%(default)s]")
+                        help="cmd to get protid, seq from db [%(default)s]")
     mysqlo.add_argument("--dtype",            default="uint32", 
                         help="numpy data type for protids [%(default)s] ie. S8 for VARCHAR(8) or uint16 for SMALLINT UNSIGNED")
+    mysqlo.add_argument("--notempfile",       default=False, action="store_true", 
+                        help="direct upload (without temp file); NOTE: this may cause MySQL time-out on some servers")
                         
     o = parser.parse_args()
     if o.verbose:
         sys.stderr.write("Options: %s\n"%str(o))
-    #print help + changelog
-    if o.changelog:
-        parser.print_help()
-        sys.stderr.write(CHANGELOG)
-        return
+
     #get sequence parser
     if o.input:
         #prepare database
@@ -379,7 +418,8 @@ def main():
         files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
                                          o.tmpdir, o.tempfiles, o.verbose)
         #upload
-        batch_insert(files, cur, o.table, seqlimit, o.nprocs, o.verbose, o.dtype, '%s')
+        upload(files, o.db, o.host, o.user, pswd, o.table, seqlimit, o.dtype, \
+               o.nprocs, o.notempfile, o.tmpdir, o.verbose)
     
 if __name__=='__main__': 
     t0  = datetime.now()
