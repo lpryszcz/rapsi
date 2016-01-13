@@ -288,13 +288,13 @@ def batch_insert(files, cur, table, seqlimit, nprocs, verbose, \
     cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
     cur.connection.commit()
     
-def dbConnect(db, host, user, pswd, table, kmer, verbose, replace):
+def dbConnect(db, host, port, user, pswd, table, kmer, verbose, replace):
     """Get connection and create empty table.
     Exit if table exists and no overwritting."""
     if verbose:
         info = "[%s] Connecting to %s @ %s as %s ...\n"
         sys.stderr.write(info%(datetime.ctime(datetime.now()), db, host, user))
-    cnx = MySQLdb.connect(db=db, host=host, user=user, passwd=pswd, \
+    cnx = MySQLdb.connect(db=db, host=host, port=port, user=user, passwd=pswd, \
                           cursorclass=MySQLdb.cursors.SSCursor)
     cur = cnx.cursor()
     #check if table exists
@@ -366,7 +366,7 @@ def main():
                         help="DNA alphabet    [amino acids]")
     parser.add_argument("--nprocs",           default=4, type=int, 
                         help="no. of threads  [%(default)s]; NOTE: so far only tempfiles parsing is threaded!")
-    parser.add_argument("--tmpdir",           default="./",
+    parser.add_argument("--tmpdir",           default="/tmp",
                         help="temp directory  [%(default)s]")
     parser.add_argument("--tempfiles",        default=10000, type=int, 
                         help="temp files no.  [%(default)s]")
@@ -382,6 +382,8 @@ def main():
                         help="user password   [will prompt if not specified]")
     mysqlo.add_argument("--host",             default='localhost', 
                         help="database host   [%(default)s]")
+    mysqlo.add_argument("-P", "--port",       default=3306, type=int, 
+                        help="server port     [%(default)s]")
     mysqlo.add_argument("-c", "--cmd",        default="SELECT protid, seq FROM protid2seq", 
                         help="cmd to get protid, seq from db [%(default)s]")
     mysqlo.add_argument("--dtype",            default="uint32", 
@@ -410,7 +412,7 @@ def main():
         if pswd==None:
             pswd = getpass.getpass("Enter MySQL password: ")
         #connect
-        cur = dbConnect(o.db, o.host, o.user, pswd, o.table, o.kmer, o.verbose, \
+        cur = dbConnect(o.db, o.host, o.port, o.user, pswd, o.table, o.kmer, o.verbose, \
                         o.replace)
         #get parser
         parser = db_seq_parser(cur, o.cmd, o.verbose)
