@@ -368,7 +368,7 @@ def main():
                         help="no. of threads  [%(default)s]; NOTE: so far only tempfiles parsing is threaded!")
     parser.add_argument("--tmpdir",           default="/tmp",
                         help="temp directory  [%(default)s]")
-    parser.add_argument("--tempfiles",        default=10000, type=int, 
+    parser.add_argument("--tempfiles",        default=1000, type=int, 
                         help="temp files no.  [%(default)s]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
