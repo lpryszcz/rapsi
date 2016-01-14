@@ -261,6 +261,7 @@ def upload(files, db, host, port, user, pswd, table, seqlimit, dtype, nprocs, \
     if not notempfile:
         #upload from tempfile, instead stdin
         args[10] = args[10].replace('/dev/stdin', out.name)
+        args = map(str, args)
         if verbose:
             info = "[%s] Uploading to database...\n %s\n"
             sys.stderr.write(info%(datetime.ctime(datetime.now()), \
