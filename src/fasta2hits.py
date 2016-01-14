@@ -310,7 +310,7 @@ def get_random_sequence(cur, db, n, nprotids, seqcmd, verbose):
     else:
         #get no. of proteins in MySQL
         s, e = seqcmd.upper().index('SELECT ')+7, seqcmd.upper().index(' FROM')
-        cmd = seqcmd[:s] + "COUNT(*)" + seqcmd[e:]
+        cmd = seqcmd[:s] + "COUNT(*)" + seqcmd[e:]; print cmd
         cur.execute(cmd)
         nprotids, = cur.fetchone()
         if verbose:
@@ -355,7 +355,7 @@ def main():
     parser.add_argument("-l", "--limit",     default=0, type=int,
                         help="stop after      [all]")
     parser.add_argument("--random",          default=0, type=int,
-                        help="return random sequences and exit [%(default)s]")
+                        help="return N random sequence(s) and exit [%(default)s]")
     similo = parser.add_argument_group('Similarity search options')
     similo.add_argument("-k", "--kmer",      default=5, type=int, 
                         help="hash length     [%(default)s]")
@@ -374,18 +374,20 @@ def main():
     similo.add_argument("--ofrac",            default=0.3, type=float, 
                         help="min. overlap of best hit [%(default)s]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
-    sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
+    sqlopt.add_argument("-d", "--db",         default="metaphors_201601", 
                         help="database        [%(default)s]")
     sqlopt.add_argument("-t", "--table",      default='hash2protids',
                         help="hashtable name  [%(default)s]")
     mysqlo = parser.add_argument_group('MySQL options')
-    mysqlo.add_argument("-u", "--user",      default="lpryszcz", 
+    mysqlo.add_argument("-u", "--user",      default="script", 
                         help="database user   [%(default)s]")
-    mysqlo.add_argument("-p", "--pswd",      default="", 
+    mysqlo.add_argument("-p", "--pswd",      default="python", 
                         help="user password   [%(default)s]")
-    mysqlo.add_argument("--host",            default='localhost', 
+    mysqlo.add_argument("-P", "--port",       default=4042, type=int, 
+                        help="server port     [%(default)s]")
+    mysqlo.add_argument("--host",            default='cgenomics.crg.es', 
                         help="database host   [%(default)s]")
-    parser.add_argument("--seqcmd",           default="",
+    parser.add_argument("--seqcmd",           default="select concat(p.protid,'_',code), seq from protid2taxid p join protid2seq ps join species s on p.protid=ps.protid and p.taxid=s.taxid where p.protid in (%s)",
                         help="SQL to fetch sequences [%(default)s]")
     mysqlo.add_argument("--dtype",            default="uint32", 
                         help="numpy data type for protids [%(default)s] ie. S8 for VARCHAR(8) or uint16 for SMALLINT UNSIGNED")
@@ -412,7 +414,7 @@ def main():
         if not o.seqcmd:
             sys.stderr.write("Sequence command (--seqcmd) needed for MySQL\n")
             sys.exit(1)
-        cnx = MySQLdb.connect(db=o.db, host=o.host, user=o.user, passwd=o.pswd)
+        cnx = MySQLdb.connect(db=o.db, host=o.host, port=o.port, user=o.user, passwd=o.pswd)
         cur = cnx.cursor()
         proteins = 0
 

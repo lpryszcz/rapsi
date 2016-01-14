@@ -226,10 +226,10 @@ def parse_tempfiles(files, seqlimit, dtype, nprocs=4, verbose=1):
     info = " %s hash uploaded; discarded: %s [memory: %s MB]\n"
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
                 
-def upload(files, db, host, user, pswd, table, seqlimit, dtype, nprocs, \
+def upload(files, db, host, port, user, pswd, table, seqlimit, dtype, nprocs, \
            notempfile=0, tmpdir="./", verbose=1, sep = "..|..", end = "..|.\n"):
     """Load to database, optionally through tempfile."""
-    args = ["mysql", "-vvv", "-h", host, "-u", user, db, "-e", \
+    args = ["mysql", "-vvv", "-h", host, "-P", port, "-u", user, db, "-e", \
             "LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY %s LINES TERMINATED BY %s"%(table, repr(sep), repr(end))]
     if pswd:
         args.append("-p%s"%pswd)
@@ -260,7 +260,7 @@ def upload(files, db, host, user, pswd, table, seqlimit, dtype, nprocs, \
     #start subprocess uploading the data
     if not notempfile:
         #upload from tempfile, instead stdin
-        args[8] = args[8].replace('/dev/stdin', out.name)
+        args[10] = args[10].replace('/dev/stdin', out.name)
         if verbose:
             info = "[%s] Uploading to database...\n %s\n"
             sys.stderr.write(info%(datetime.ctime(datetime.now()), \
@@ -420,7 +420,7 @@ def main():
         files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
                                          o.tmpdir, o.tempfiles, o.verbose)
         #upload
-        upload(files, o.db, o.host, o.user, pswd, o.table, seqlimit, o.dtype, \
+        upload(files, o.db, o.host, o.port, o.user, pswd, o.table, seqlimit, o.dtype, \
                o.nprocs, o.notempfile, o.tmpdir, o.verbose)
     
 if __name__=='__main__': 
