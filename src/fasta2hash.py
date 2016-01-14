@@ -251,8 +251,10 @@ def upload(files, db, host, port, user, pswd, table, seqlimit, dtype, nprocs, \
             sys.stderr.write(info%(datetime.ctime(datetime.now()), out.name))
     #write to out
     try:
-        out.write("".join("%s%s%s%s"%(mer, sep, protids, end) for mer, protids in \
-                          parse_tempfiles(files, seqlimit, dtype, nprocs, verbose)))
+        #out.write("".join("%s%s%s%s"%(mer, sep, protids, end) for mer, protids in \
+        #                  parse_tempfiles(files, seqlimit, dtype, nprocs, verbose)))
+        for mer, protids in parse_tempfiles(files, seqlimit, dtype, nprocs, verbose):
+            out.write("%s%s%s%s"%(mer, sep, protids, end))
         #close out
         out.close()
     #with exception catching
