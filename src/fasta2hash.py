@@ -226,70 +226,20 @@ def parse_tempfiles(files, seqlimit, dtype, nprocs=4, verbose=1):
     info = " %s hash uploaded; discarded: %s [memory: %s MB]\n"
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
                 
-def upload(files, cur, db, host, port, user, pswd, table, seqlimit, dtype, nprocs, \
-           notempfile=0, tmpdir="./", verbose=1, sep = "\0", end = "\Z"):
-    #       sep = ",,....|....,,", end = ",,....|....,,\n"):
+def upload(files, db, host, port, user, pswd, table, seqlimit, dtype, nprocs, \
+           notempfile=0, tmpdir="./", verbose=1, step=1000):
     """Load to database, optionally through tempfile."""
-    """cmd = "INSERT INTO `%s` (hash, protids) VALUES ('%s', LOAD_FILE('%s'))"
-    for mer, protids in parse_tempfiles(files, seqlimit, dtype, nprocs, verbose):
-        #out.write("%s%s%s%s"%(mer, sep, protids, end))
-        with tempfile.NamedTemporaryFile(dir=tmpdir, delete=0) as out:
-            out.write(protids)
-        cur.execute(cmd%(table, mer, out.name))
-    cur.connection().commit()    
-    return
-    """    
-    args = ["mysql", "-vvv", "-h", host, "-P", port, "-u", user, db, "-e", \
-            "LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY %s LINES TERMINATED BY %s"%(table, repr(sep), repr(end))]
-    args = map(str, args)
-    if pswd:
-        args.append("-p%s"%pswd)
-    #write to mysql directly
-    if notempfile:
-        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, \
-                             stderr=subprocess.PIPE)
-        out = p.stdin
-        if verbose:
-            info = "[%s] Uploading directly to database...\n %s\n"
-            sys.stderr.write(info%(datetime.ctime(datetime.now()), \
-                                   " ".join(filter(lambda x: not x.startswith("-p"), args))))
-    #or through tempfile
-    else:
-        out = tempfile.NamedTemporaryFile(dir=tmpdir, delete=0)
-        if verbose:
-            info = "[%s] Storing to tempfile: %s ...\n"
-            sys.stderr.write(info%(datetime.ctime(datetime.now()), out.name))
-    #write to out
-    try:
-        #out.write("".join("%s%s%s%s"%(mer, sep, protids, end) for mer, protids in \
-        #                  parse_tempfiles(files, seqlimit, dtype, nprocs, verbose)))
-        for mer, protids in parse_tempfiles(files, seqlimit, dtype, nprocs, verbose):
-            out.write("%s%s%s%s\n"%(mer, sep, protids, end))
-        #close out
-        out.close()
-    #with exception catching
-    except Exception, e:
-        sys.stderr.write("[ERROR] %s\n"%str(e))
-    #start subprocess uploading the data
-    if not notempfile:
-        #upload from tempfile, instead stdin
-        args[10] = args[10].replace('/dev/stdin', out.name)
-        if verbose:
-            info = "[%s] Uploading to database...\n %s\n"
-            sys.stderr.write(info%(datetime.ctime(datetime.now()), \
-                                   " ".join(filter(lambda x: not x.startswith("-p"), args))))
-        #upload tmpfile
-        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    #wait to finish & check return code
-    p.wait()
-    if p.returncode:
-        info = "[WARNING] Likely error on data upload:\n%s\n"
-        sys.stderr.write(info%"\n".join(p.stderr.readlines()))
-        if not notempfile:
-            sys.stderr.write("NOTE: You can reuse the temp file: %s !\n"%out.name)
-    elif not notempfile:
-        os.unlink(out.name)
-                          
+    cur = _connect(db, host, port, user, pswd)
+    cmd = "INSERT INTO "+table+" (hash, protids) VALUES (%s, %s)"
+    data = []
+    for (mer, protids) in parse_tempfiles(files, seqlimit, dtype, nprocs, verbose):
+        data.append((mer, protids))
+        if len(data)>step:
+            cur.executemany(cmd, data)
+            data = []
+    if data:
+        cur.executemany(cmd, data)
+                           
 def batch_insert(files, cur, table, seqlimit, nprocs, verbose, \
                  dtype="uint32", rep="?"):
     """Insert to database."""
@@ -300,6 +250,13 @@ def batch_insert(files, cur, table, seqlimit, nprocs, verbose, \
     #commit
     cur.execute("CREATE INDEX `idx_hash` ON `%s` (hash)"%table)
     cur.connection.commit()
+
+def _connect(db, host, port, user, pswd):
+    """Return db cursor"""
+    cnx = MySQLdb.connect(db=db, host=host, port=port, user=user, passwd=pswd, \
+                          cursorclass=MySQLdb.cursors.SSCursor)
+    cur = cnx.cursor()
+    return cur
     
 def dbConnect(db, host, port, user, pswd, table, kmer, verbose, replace):
     """Get connection and create empty table.
@@ -307,9 +264,7 @@ def dbConnect(db, host, port, user, pswd, table, kmer, verbose, replace):
     if verbose:
         info = "[%s] Connecting to %s @ %s as %s ...\n"
         sys.stderr.write(info%(datetime.ctime(datetime.now()), db, host, user))
-    cnx = MySQLdb.connect(db=db, host=host, port=port, user=user, passwd=pswd, \
-                          cursorclass=MySQLdb.cursors.SSCursor)
-    cur = cnx.cursor()
+    cur = _connect(db, host, port, user, pswd)
     #check if table exists
     cur.execute('SHOW TABLES')
     tables = set(t for t, in cur.fetchall())
@@ -433,7 +388,7 @@ def main():
         files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
                                          o.tmpdir, o.tempfiles, o.verbose)
         #upload
-        upload(files, cur, o.db, o.host, o.port, o.user, pswd, o.table, seqlimit, o.dtype, \
+        upload(files, o.db, o.host, o.port, o.user, pswd, o.table, seqlimit, o.dtype, \
                o.nprocs, o.notempfile, o.tmpdir, o.verbose)
     
 if __name__=='__main__': 
