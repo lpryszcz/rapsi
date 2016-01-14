@@ -236,7 +236,7 @@ def upload(files, cur, db, host, port, user, pswd, table, seqlimit, dtype, nproc
         with tempfile.NamedTemporaryFile(dir=tmpdir, delete=0) as out:
             out.write(protids)
         cur.execute(cmd%(table, mer, out.name))
-        cur.connection().commit()    
+    cur.connection().commit()    
     return
         
     args = ["mysql", "-vvv", "-h", host, "-P", port, "-u", user, db, "-e", \
