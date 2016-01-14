@@ -227,10 +227,10 @@ def parse_tempfiles(files, seqlimit, dtype, nprocs=4, verbose=1):
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
                 
 def upload(files, cur, db, host, port, user, pswd, table, seqlimit, dtype, nprocs, \
-           notempfile=0, tmpdir="./", verbose=1,
-           sep = ",,....|....,,", end = ",,....|....,,\n"):
+           notempfile=0, tmpdir="./", verbose=1, sep = "\0", end = "\Z"):
+    #       sep = ",,....|....,,", end = ",,....|....,,\n"):
     """Load to database, optionally through tempfile."""
-    cmd = "INSERT INTO `%s` (hash, protids) VALUES ('%s', LOAD_FILE('%s'))"
+    """cmd = "INSERT INTO `%s` (hash, protids) VALUES ('%s', LOAD_FILE('%s'))"
     for mer, protids in parse_tempfiles(files, seqlimit, dtype, nprocs, verbose):
         #out.write("%s%s%s%s"%(mer, sep, protids, end))
         with tempfile.NamedTemporaryFile(dir=tmpdir, delete=0) as out:
@@ -238,7 +238,7 @@ def upload(files, cur, db, host, port, user, pswd, table, seqlimit, dtype, nproc
         cur.execute(cmd%(table, mer, out.name))
     cur.connection().commit()    
     return
-        
+    """    
     args = ["mysql", "-vvv", "-h", host, "-P", port, "-u", user, db, "-e", \
             "LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY %s LINES TERMINATED BY %s"%(table, repr(sep), repr(end))]
     args = map(str, args)
@@ -264,7 +264,7 @@ def upload(files, cur, db, host, port, user, pswd, table, seqlimit, dtype, nproc
         #out.write("".join("%s%s%s%s"%(mer, sep, protids, end) for mer, protids in \
         #                  parse_tempfiles(files, seqlimit, dtype, nprocs, verbose)))
         for mer, protids in parse_tempfiles(files, seqlimit, dtype, nprocs, verbose):
-            out.write("%s%s%s%s"%(mer, sep, protids, end))
+            out.write("%s%s%s%s\n"%(mer, sep, protids, end))
         #close out
         out.close()
     #with exception catching
