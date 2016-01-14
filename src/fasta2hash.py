@@ -227,7 +227,7 @@ def parse_tempfiles(files, seqlimit, dtype, nprocs=4, verbose=1):
     sys.stderr.write(info%(i-discarded, discarded, memory_usage())) 
                 
 def upload(files, db, host, port, user, pswd, table, seqlimit, dtype, nprocs, \
-           notempfile=0, tmpdir="./", verbose=1, sep = "..|..", end = "..|.\n"):
+           notempfile=0, tmpdir="./", verbose=1, sep = "....|....", end = "....|....\n"):
     """Load to database, optionally through tempfile."""
     args = ["mysql", "-vvv", "-h", host, "-P", port, "-u", user, db, "-e", \
             "LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY %s LINES TERMINATED BY %s"%(table, repr(sep), repr(end))]
