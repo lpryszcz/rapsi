@@ -231,6 +231,7 @@ def upload(files, db, host, port, user, pswd, table, seqlimit, dtype, nprocs, \
     """Load to database, optionally through tempfile."""
     args = ["mysql", "-vvv", "-h", host, "-P", port, "-u", user, db, "-e", \
             "LOAD DATA LOCAL INFILE '/dev/stdin' INTO TABLE `%s` FIELDS TERMINATED BY %s LINES TERMINATED BY %s"%(table, repr(sep), repr(end))]
+    args = map(str, args)
     if pswd:
         args.append("-p%s"%pswd)
     #write to mysql directly
@@ -261,7 +262,6 @@ def upload(files, db, host, port, user, pswd, table, seqlimit, dtype, nprocs, \
     if not notempfile:
         #upload from tempfile, instead stdin
         args[10] = args[10].replace('/dev/stdin', out.name)
-        args = map(str, args)
         if verbose:
             info = "[%s] Uploading to database...\n %s\n"
             sys.stderr.write(info%(datetime.ctime(datetime.now()), \
