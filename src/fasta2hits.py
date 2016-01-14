@@ -309,6 +309,7 @@ def get_random_sequence(cur, db, n, nprotids, seqcmd, verbose):
         seqs = sqlite2seq(cur, db, protids)
     else:
         #get no. of proteins in MySQL
+        seqcmd = seqcmd.split(' where ')[0]
         s, e = seqcmd.upper().index('SELECT ')+7, seqcmd.upper().index(' FROM')
         cmd = seqcmd[:s] + "COUNT(*)" + seqcmd[e:]; print cmd
         cur.execute(cmd)
@@ -318,7 +319,8 @@ def get_random_sequence(cur, db, n, nprotids, seqcmd, verbose):
         #get random ids
         protids = random.sample(xrange(1, nprotids+1), n)
         seqs = []
-        for x in protids: 
+        for x in protids:
+            print seqcmd+" LIMIT %s, 1"%x
             cur.execute(seqcmd+" LIMIT %s, 1"%x)
             seqs.append(">%s\n%s\n"%cur.fetchone())
         seqs = "".join(seqs)
@@ -387,7 +389,7 @@ def main():
                         help="server port     [%(default)s]")
     mysqlo.add_argument("--host",            default='cgenomics.crg.es', 
                         help="database host   [%(default)s]")
-    parser.add_argument("--seqcmd",           default="select concat(p.protid,'_',code), seq from protid2taxid p join protid2seq ps join species s on p.protid=ps.protid and p.taxid=s.taxid where p.protid in (%s)",
+    parser.add_argument("--seqcmd",           default="select protid, seq from protid2seq", #where p.protid in (%s)
                         help="SQL to fetch sequences [%(default)s]")
     mysqlo.add_argument("--dtype",            default="uint32", 
                         help="numpy data type for protids [%(default)s] ie. S8 for VARCHAR(8) or uint16 for SMALLINT UNSIGNED")
