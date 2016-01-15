@@ -26,7 +26,7 @@ The search consists of two steps (`fasta2hits.py`):
 - **identification of likely targets** by k-mer search against pre-hashed targets (stored in MySQL or SQLite)
 - **alignement** of query and selected targets (BLAT)
 
-![Flowchart](/docs/rapsi_flowchart.png)
+![Flowchart](/docs/rapsi_flowchart.png = 250x)
 
 ## Prerequisites
 - Python 2.7+ & Biopython 1.6+ `sudo easy_install -U biopython`
