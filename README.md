@@ -163,7 +163,7 @@ awk '$1==$2' test/test.fa.out | wc -l
 ```
 
 - test using pre-compiled db with over 18M targets (MetaPhOrs)
-```
+```bash
 # get 100 random sequences
 src/fasta2hits.py --random 100 > test/test.fa
 
