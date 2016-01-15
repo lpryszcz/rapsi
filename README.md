@@ -167,7 +167,7 @@ awk '$1==$2' test/test.fa.out | wc -l
 # get 100 random sequences
 src/fasta2hits.py --random 100 > test/test.fa
 
-# search agains db
+# search agains remote db
 src/fasta2hits.py -i test/test.fa -o test/test.fa.out
 ```
 
