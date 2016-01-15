@@ -8,7 +8,7 @@
   - **[Citation](#citation)**  
 
 # RapSi
-**RapSi** (**Rap**id **Si**milarity search) finds similar proteins nearly instantly. Major bottleneck of existing tools comes from parsing (slow) or loading database of targets (high memory usage) prior to alignment step. To overcome this bottleneck, we hash target sequences into SQL db. This guarantees nearly instant selection of promising targets, while securing low memory footprint. Only pre-selected targets are later aligned with a query. 
+**RapSi** (**Rap**id **Si**milarity search) finds similar sequences nearly instantly. Major bottleneck of existing tools comes from parsing (slow) or loading database of targets (high memory usage) prior to alignment step. To overcome this bottleneck, we hash target sequences into SQL db. This guarantees nearly instant selection of promising targets, while securing low memory footprint. Only pre-selected targets are later aligned with a query. 
 
 RapSi is:
 - **fast** & **lightweight**, with multi-core support and memory-optimised, reusing existing sequence tables, with BGZIP compression support
@@ -17,7 +17,7 @@ RapSi is:
 - **straightforward** to integrate with front-end of your service (HTML-formatted output)
 
 RapSi consists of two main modules:
-* **fasta2hash.py** - hash database of targets and store in MySQL or SQLite
+* **fasta2hash.py** - hash database of targets and store it in MySQL or SQLite
 * **fasta2hits.py** - similarity search tool 
 
 In order to use RapSi, first you need to hash your target sequences (`fasta2hash.py`). This takes some time, but it's done once per each set of targets. 
@@ -34,6 +34,8 @@ The search consists of two steps (`fasta2hits.py`):
 - bgzip (for running test set)
 
 ## Running the program
+RapSi input consists of either FASTA-formatted file(s) or MySQL DB connection. First, the program will hash the set of targets (`fasta2hash.py`) and store it in SQLite or MySQL DB (depending on input used).
+Later, the target sequences can be search for similarity with FASTA or FASTQ-formatted input files (`fasta2hits.py`). 
 
 ### Parameters
 
