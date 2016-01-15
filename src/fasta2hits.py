@@ -46,7 +46,12 @@ def sqlite2seq(cur, db, protids):
     cur.execute("SELECT name FROM file_data")
     files = {} #name: open(os.path.join(os.path.dirname(db), name)) for name, in cur.fetchall()}
     for name, in cur.fetchall():
-        fpath = os.path.join(os.path.dirname(db), name)
+        # if db is in another directory
+        if os.path.isfile(name):
+            fpath = name
+        else:
+            fpath = os.path.join(os.path.dirname(db), name)
+        # open fasta file
         if name.endswith('.gz'):
             files[name] = bgzf.open(fpath)
         else:
@@ -126,7 +131,7 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
     if verbose:
         sys.stderr.write(" Fetching %s sequences...\n" % len(fprotids))
     #select protids as text or str
-    if seqcmd:
+    if not os.path.isfile(db): #seqcmd:
         targets = mysql2seq(cur, fprotids, seqcmd)
     else:
         targets = sqlite2seq(cur, db, fprotids)
@@ -389,7 +394,7 @@ def main():
                         help="server port     [%(default)s]")
     mysqlo.add_argument("--host",            default='cgenomics.crg.es', 
                         help="database host   [%(default)s]")
-    parser.add_argument("--seqcmd",           default="select protid, seq from protid2seq", #where p.protid in (%s)
+    parser.add_argument("--seqcmd",           default="select protid, seq from protid2seq where p.protid in (%s)", 
                         help="SQL to fetch sequences [%(default)s]")
     mysqlo.add_argument("--dtype",            default="uint32", 
                         help="numpy data type for protids [%(default)s] ie. S8 for VARCHAR(8) or uint16 for SMALLINT UNSIGNED")
@@ -485,7 +490,7 @@ if __name__=='__main__':
         main()
     except KeyboardInterrupt:
         sys.stderr.write("\nCtrl-C pressed!      \n")
-    except IOError as e:
-        sys.stderr.write("\nI/O error({0}): {1}\n".format(e.errno, e.strerror))
+    #except IOError as e:
+    #    sys.stderr.write("%s\n"%e)#\nI/O error({0}): {1}\n".format(e.errno, e.strerror))
     dt  = datetime.now()-t0
     sys.stderr.write("#Time elapsed: %s\n" % dt)
