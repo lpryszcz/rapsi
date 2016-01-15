@@ -231,6 +231,7 @@ def upload(files, db, host, port, user, pswd, table, seqlimit, dtype, nprocs, \
     """Load to database, optionally through tempfile."""
     cur = _connect(db, host, port, user, pswd)
     cmd = "INSERT INTO "+table+" (hash, protids) VALUES (%s, %s)"
+    # execute in batches, to avoid error due to 'max_allowed_packet'
     data = []
     for (mer, protids) in parse_tempfiles(files, seqlimit, dtype, nprocs, verbose):
         data.append((mer, protids))
