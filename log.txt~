@@ -70,6 +70,4 @@ time wget -O- ftp://ftp.ncbi.nih.gov/pub/taxonomy/gi_taxid_????.dmp.gz | zcat | 
 #rapsiX #3:11 #10
 for i in 1 2 3; do echo `date` $i; src/fasta2hits.py -d nr.fa.db3 -l10000 -s 1 -X -i ~/cluster/phenols/transcriptome/_archives/CANAL_RNA$i.fastq.gz | src/hits2taxa.py -d taxonomy.db3; done; date
 
-##
-#phylomeDB
 
