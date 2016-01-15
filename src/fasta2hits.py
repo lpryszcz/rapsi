@@ -1,35 +1,11 @@
 #!/usr/bin/env python
 desc="""Scan hash table and report matches. For searches for relatively similar
 sequences, sequence sampling is recommended.
-
-PARAMETERS EXAMPLES:
- --link  "<a target=_blank href='/?q=SeqInfo&seqid=Phy%s'>Phy%s</a>"
-
-python wsgi/fasta2hits.py -vi ../test.fa --host cgenomics.crg.es -uscript -ppython --seqcmd "select concat(p.protid,'_',code), seq from protid2taxid p join protid2seq ps join species s on p.protid=ps.protid and p.taxid=s.taxid where p.protid in (%s)"
-
 """
 epilog="""Author:
 l.p.pryszcz@gmail.com
 
 Barcelona/Mizerow, 13/11/2013
-
-TO ADD:
-- url input scanning for str threats like ", '
-
-
-CHANGELOG:
-v1.3:
-- np.array compression (30% reduced hash size)
-- batch query
-- P & E-value statistics
-- bz2 support
-v1.2:
-- DNA support
-v1.1:
-- implemented nucleotide query (rapsiX)
-- FastQ, genbank, embl support
-- auto query format recognition
-- BGZIP support
 """
 
 import commands, gzip, math, os, sys, time
