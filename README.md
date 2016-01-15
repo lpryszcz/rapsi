@@ -34,7 +34,7 @@ The search consists of two steps (`fasta2hits.py`):
 - [bgzip](http://blastedbio.blogspot.com/2011/11/bgzf-blocked-bigger-better-gzip.html) (for running test set) `sudo apt-get install tabix`
 
 ## Running the program
-RapSi input consists of either FASTA-formatted file(s) or MySQL DB connection. First, the program will hash the set of targets (`fasta2hash.py`) and store it in SQLite or MySQL DB (depending on input used).
+RapSi input consists of either FASTA-formatted file(s) or connection information to MySQL DB storing sequences. First, the program will hash the set of targets (`fasta2hash.py`) and store it in SQLite or MySQL DB (depending on input used).
 Later, the target sequences can be search for similarity with FASTA or FASTQ-formatted input files (`fasta2hits.py`). 
 
 ### Parameters
