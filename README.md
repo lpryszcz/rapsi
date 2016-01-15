@@ -20,6 +20,8 @@ RapSi is:
 - **easy-to-implement** with your existing DB schema
 - **straightforward** to integrate with front-end of your service (HTML-formatted output)
 
+![Flowchart](/docs/rapsi_flowchart.png)
+
 ## Prerequisites
 - Python 2.7+ & Biopython 1.6+ `sudo easy_install -U biopython`
 - [BLAT](https://genome.ucsc.edu/FAQ/FAQblat.html#blat3)

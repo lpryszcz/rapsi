@@ -311,7 +311,7 @@ def get_random_sequence(cur, db, n, nprotids, seqcmd, verbose):
         #get no. of proteins in MySQL
         seqcmd = seqcmd.split(' where ')[0]
         s, e = seqcmd.upper().index('SELECT ')+7, seqcmd.upper().index(' FROM')
-        cmd = seqcmd[:s] + "COUNT(*)" + seqcmd[e:]; print cmd
+        cmd = seqcmd[:s] + "COUNT(*)" + seqcmd[e:]#; print cmd
         cur.execute(cmd)
         nprotids, = cur.fetchone()
         if verbose:
@@ -320,7 +320,7 @@ def get_random_sequence(cur, db, n, nprotids, seqcmd, verbose):
         protids = random.sample(xrange(1, nprotids+1), n)
         seqs = []
         for x in protids:
-            print seqcmd+" LIMIT %s, 1"%x
+            #print seqcmd+" LIMIT %s, 1"%x
             cur.execute(seqcmd+" LIMIT %s, 1"%x)
             seqs.append(">%s\n%s\n"%cur.fetchone())
         seqs = "".join(seqs)
