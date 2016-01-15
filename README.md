@@ -27,6 +27,7 @@ The search consists of two steps (`fasta2hits.py`):
 - **alignement** of query and selected targets (BLAT)
 
 ![Flowchart](/docs/rapsi_flowchart.png "Flowchart" {width=600px})
+<img src="/docs/rapsi_flowchart.png" width="600">
 
 ## Prerequisites
 - Python 2.7+ & Biopython 1.6+ `sudo easy_install -U biopython`
