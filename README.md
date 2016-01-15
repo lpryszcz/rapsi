@@ -31,7 +31,7 @@ The search consists of two steps (`fasta2hits.py`):
 ## Prerequisites
 - Python 2.7+ & Biopython 1.6+ `sudo easy_install -U biopython`
 - [BLAT](https://genome.ucsc.edu/FAQ/FAQblat.html#blat3)
-- bgzip (for running test set)
+- [bgzip](http://blastedbio.blogspot.com/2011/11/bgzf-blocked-bigger-better-gzip.html) (for running test set) `sudo apt-get install tabix`
 
 ## Running the program
 RapSi input consists of either FASTA-formatted file(s) or MySQL DB connection. First, the program will hash the set of targets (`fasta2hash.py`) and store it in SQLite or MySQL DB (depending on input used).
