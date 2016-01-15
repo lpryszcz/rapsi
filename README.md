@@ -16,6 +16,8 @@ RapSi is:
 - **easy-to-implement** with your existing DB schema
 - **straightforward** to integrate with front-end of your service (HTML-formatted output)
 
+<img src="/docs/rapsi_flowchart.png" width="600">
+
 RapSi consists of two main modules:
 * **fasta2hash.py** - hash database of targets and store it in MySQL or SQLite
 * **fasta2hits.py** - similarity search tool 
@@ -25,8 +27,6 @@ In order to use RapSi, first you need to hash your target sequences (`fasta2hash
 The search consists of two steps (`fasta2hits.py`):
 - **identification of likely targets** by k-mer search against pre-hashed targets (stored in MySQL or SQLite)
 - **alignement** of query and selected targets (BLAT)
-
-<img src="/docs/rapsi_flowchart.png" width="600">
 
 ## Prerequisites
 - Python 2.7+ & Biopython 1.6+ `sudo easy_install -U biopython`
