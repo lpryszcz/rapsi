@@ -143,7 +143,8 @@ Later, the target sequences can be search for similarity with FASTA or FASTQ-for
 ```
 
 ### Test run
-
+In order to test the programme, execute following code:
+- test using local FASTA file
 ```bash
 # get uniprot database and bzgip compress it
 wget -O- ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz | zcat | bgzip > sprot.gz
@@ -159,6 +160,15 @@ src/fasta2hits.py -v -i test/test.fa -d test/sprot.gz.db3 -o test/test.fa.out
 
 # check if all targets aligned by comparing query and target ID
 awk '$1==$2' test/test.fa.out | wc -l
+```
+
+- test using pre-compiled db with over 18M targets (MetaPhOrs)
+```
+# get 100 random sequences
+src/fasta2hits.py --random 100 > test/test.fa
+
+# search agains db
+src/fasta2hits.py -i test/test.fa -o test/test.fa.out
 ```
 
 ## Citation

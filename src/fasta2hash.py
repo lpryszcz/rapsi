@@ -327,7 +327,7 @@ def main():
     parser.add_argument("--tempfiles",        default=1000, type=int, 
                         help="temp files no.  [%(default)s]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
-    sqlopt.add_argument("-d", "--db",         default="metaphors_201310", 
+    sqlopt.add_argument("-d", "--db",         default="", 
                         help="database        [%(default)s]")
     sqlopt.add_argument("-t", "--table",      default='hash2protids',
                         help="hashtable name  [%(default)s]")
@@ -338,7 +338,7 @@ def main():
                         help="user password   [will prompt if not specified]")
     mysqlo.add_argument("--host",             default='localhost', 
                         help="database host   [%(default)s]")
-    mysqlo.add_argument("-P", "--port",       default=3306, type=int, 
+    mysqlo.add_argument("-P", "--port",       default=4042, type=int, 
                         help="server port     [%(default)s]")
     mysqlo.add_argument("-c", "--cmd",        default="SELECT protid, seq FROM protid2seq", 
                         help="cmd to get protid, seq from db [%(default)s]")
