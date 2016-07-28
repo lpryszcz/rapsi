@@ -147,16 +147,17 @@ In order to test the programme, execute following code:
 - test using local FASTA file
 ```bash
 # get uniprot database and bzgip compress it
-wget -O- ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz | zcat | bgzip > sprot.gz
+mkdir test
+wget -O- ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz | zcat | bgzip > test/sprot.gz
 
 # hash database [this make take some minutes]
-src/fasta2hash.py -v -i test/sprot.gz -d test/sprot.gz.db3
+./fasta2hash.py -v -i test/sprot.gz -d test/sprot.gz.db3
 
 # get 100 random sequences from db
-src/fasta2hits.py -v --random 100 -d test/sprot.gz.db3 > test/test.fa
+./fasta2hits.py -v --random 100 -d test/sprot.gz.db3 > test/test.fa
 
 # search agains db
-src/fasta2hits.py -v -i test/test.fa -d test/sprot.gz.db3 -o test/test.fa.out
+./fasta2hits.py -v -i test/test.fa -d test/sprot.gz.db3 -o test/test.fa.out
 
 # check if all targets aligned by comparing query and target ID
 awk '$1==$2' test/test.fa.out | wc -l
@@ -165,10 +166,10 @@ awk '$1==$2' test/test.fa.out | wc -l
 - test using pre-compiled db with over 18M targets (MetaPhOrs)
 ```bash
 # get 100 random sequences
-src/fasta2hits.py --random 100 > test/test.fa
+./fasta2hits.py --random 100 > test/test.fa
 
 # search agains remote db
-src/fasta2hits.py -i test/test.fa -o test/test.fa.out
+./fasta2hits.py -i test/test.fa -o test/test.fa.out
 ```
 
 ## Citation
