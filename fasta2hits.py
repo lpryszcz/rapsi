@@ -61,19 +61,19 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
         sys.stderr.write(info % (len("".join(qseqs)), len(qseqs)))
     kmers = [] #set()
     for qseq in qseqs:
-        kmers.append(seq2mers(qseq, kmer, step))
+        kmers.append(list(seq2mers(qseq, kmer, step)))
     if verbose:
         sys.stderr.write("  %s mers\n"%sum(len(x) for x in kmers))
     fprotids = []
     for sampling in samplings:
         mers = []
         for qmers in kmers:
-            mers += list(qmers)[:sampling]
+            mers += qmers[:sampling]
         mers = set(mers)
         if verbose:
-            sys.stderr.write("  Sampled %s mers: %s...\n"% (len(mers),", ".join(list(mers)[:6])))
+            sys.stderr.write("  Sampled %s mers: %s...\n"% (len(mers),", ".join(map(str, list(mers)[:6]))))
         #get protids for set of mers
-        cmd = "select protids from `%s` where hash in ('%s')" % (table, "','".join(mers))    
+        cmd = "select protids from `%s` where hash in (%s)" % (table, ",".join(map(str, mers)))
         cur.execute(cmd)
         protids = {}
         for merprotids, in cur:
@@ -340,7 +340,7 @@ def main():
     parser.add_argument("--random",          default=0, type=int,
                         help="return N random sequence(s) and exit [%(default)s]")
     similo = parser.add_argument_group('Similarity search options')
-    similo.add_argument("-k", "--kmer",      default=5, type=int, 
+    similo.add_argument("-k", "--kmer",      default=10, type=int, 
                         help="hash length     [%(default)s]")
     similo.add_argument("--blatpath",        default='blat', 
                         help="BLAT path       [%(default)s]")

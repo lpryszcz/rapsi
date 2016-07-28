@@ -55,7 +55,7 @@ def aaseq2mers(seq, kmer, step, aminoset=set(aminos)):
         if len(imer)<len(mer):
             continue
         # avoid 0
-        yield int(imer, base=len(aminos)+1
+        yield int(imer, base=len(aminos))+1
 
 def reverse_complement(mer):
     """Return DNA reverse complement"""
@@ -147,7 +147,7 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
         seq2mers = dnaseq2mers
         merspace = len(alphabet)**kmer/2 #reverse complement
     else:
-        alphabet = aminos
+        alphabet = reduced_alphabet.values() #aminos
         seq2mers = aaseq2mers
         merspace = len(alphabet)**kmer
     alphabetset = set(alphabet)
@@ -160,12 +160,13 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     mer2file = {} #py2.6 compatible
     for i in xrange(merspace):
         mer2file[encode(i, alphabet, 5)] = files[i%len(alphabet)]
-    """    
+    """
     #hash sequences
     i = 0
     for i, (seqid, seq) in enumerate(parser, 1):
         if verbose and not i%1e3:
             sys.stderr.write(" %s\r"%i)
+            #break
         for mer in seq2mers(seq, kmer, step, alphabetset):
             """# catch wrong kmers 
             if mer in mer2file:
@@ -283,8 +284,10 @@ def dbConnect(db, host, port, user, pswd, table, kmer, verbose, replace):
             cur.execute(cmd)
         else:
             sys.exit('Table %s already exists!'%table)
-    #create table #index added after compression PRIMARY KEY
-    cmd = 'CREATE TABLE `%s` (`hash` CHAR(%s), `protids` BLOB, INDEX `idx_hash` (hash)) ENGINE=MyISAM'%(table, kmer)
+    # create table #index added after compression PRIMARY KEY
+    #cmd = 'CREATE TABLE `%s` (`hash` CHAR(%s), `protids` BLOB, INDEX `idx_hash` (hash)) ENGINE=MyISAM'%(table, kmer)
+    ## INT - optimise it
+    cmd = 'CREATE TABLE `%s` (`hash` INT(%s), `protids` BLOB, INDEX `idx_hash` (hash)) ENGINE=MyISAM'%(table, kmer)
     if verbose:
         sys.stderr.write(" %s\n"%cmd)
     cur.execute(cmd)
@@ -317,7 +320,7 @@ def dbConnect_sqlite(db, table, kmer, verbose, replace):
     cur.execute("CREATE TABLE meta_data (key TEXT, value TEXT)")
     cur.execute("CREATE TABLE file_data (file_number INTEGER, name TEXT)")
     cur.execute("CREATE TABLE offset_data (key INTEGER PRIMARY KEY, file_number INTEGER, offset INTEGER, length INTEGER)")
-    cur.execute("CREATE TABLE %s (hash CHAR(%s), protids array)"%(table, kmer))
+    cur.execute("CREATE TABLE %s (hash INT(%s), protids array)"%(table, kmer))
     return cur
             
 def main():
@@ -329,7 +332,7 @@ def main():
     parser.add_argument('--version', action='version', version='1.4a')   
     parser.add_argument("-i", "--input",      nargs="*",
                         help="fasta file(s)   [get seqs from db]")
-    parser.add_argument("-k", "--kmer",       default=5, type=int, 
+    parser.add_argument("-k", "--kmer",       default=10, type=int, 
                         help="hash length     [%(default)s]")
     parser.add_argument("-r", "--replace",    default=False, action="store_true",
                         help="overwrite table if exists")

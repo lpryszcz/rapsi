@@ -1,17 +1,3 @@
-## v1.4
-rm test/sprot.gz.db4 && ./fasta2hash.py -v -i test/sprot.gz -d test/sprot.gz.db4
-Options: Namespace(cmd='SELECT protid, seq FROM protid2seq', db='test/sprot.gz.db4', dna=False, dtype='uint32', host='localhost', input=['test/sprot.gz'], kmer=10, kmerfrac=0.05, notempfile=False, nprocs=4, port=4042, pswd=None, replace=False, step=1, table='hash2protids', tempfiles=1000, tmpdir='/tmp', user='lpryszcz', verbose=True)
-[Thu Jul 28 16:42:45 2016] Preparing sqlite3 database: test/sprot.gz.db4 ...
-[Thu Jul 28 16:42:45 2016] Preparing 1000 temporary files...
-[Thu Jul 28 16:42:45 2016] Hashing and indexing sequences...
- 196219159 letters in 550116 sequences [memory: 37 MB]
- Setting seqlimit to: 275
-[Thu Jul 28 16:52:53 2016] Uploading...
- 7551032 hash uploaded; discarded: 89132 [memory: 37 MB]
-#Time elapsed: 0:12:31.289764
-
-
-
 ##BLAST
 #33:27 #need to edit blastdb/nr.fa.pal and remove blastdb/ from all lines
 time formatdb -i nr.fa -n blastdb/nr.fa
@@ -86,9 +72,4 @@ for i in 1 2 3; do echo `date` $i; src/fasta2hits.py -d nr.fa.db3 -l10000 -s 1 -
 
 ##
 #phylomeDB
-
-
-
-
-
 
