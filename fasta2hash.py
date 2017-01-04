@@ -25,8 +25,7 @@ DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
 mj5 = {'A': 1, 'C': 1, 'E': 4, 'D': 4, 'G': 2, 'F': 0, 'I': 0, 'H': 2, 'K': 3, 'M': 0, 'L': 0, 'N': 2, 'Q': 2, 'P': 2, 'S': 2, 'R': 3, 'T': 2, 'W': 1, 'V': 0, 'Y': 2}
 ## MFILV, A, C, WYQHPGTSN, RK, DE
 mj6 = {'A': 1, 'C': 2, 'E': 5, 'D': 5, 'G': 3, 'F': 0, 'I': 0, 'H': 3, 'K': 4, 'M': 0, 'L': 0, 'N': 3, 'Q': 3, 'P': 3, 'S': 3, 'R': 4, 'T': 3, 'W': 3, 'V': 0, 'Y': 3}
-reduced_alphabet = mj5
-
+reduced_alphabet = mj6
 
 def memory_usage():
     """Return memory usage in MB"""
@@ -45,17 +44,17 @@ def decode(base, alphabet, n=0):
         n += alphabet.index(char) * (len(alphabet) ** (len(base) - i))
     return n  
     
-def aaseq2mers(seq, kmer, step, aminoset=set(aminos)):
+def aaseq2mers(seq, kmer, step, aminoset=set(reduced_alphabet.values())):
     """Kmers generator for amino seq"""
     mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))
     for mer in mers:
         # get mer as int with given base 
         imer = "".join(map(str, (reduced_alphabet[aa] for aa in mer if aa in reduced_alphabet)))
         # catch wrong kmers
-        if len(imer)<len(mer):
+        if len(imer)!=len(mer):
             continue
         # avoid 0
-        yield int(imer, base=len(aminos))+1
+        yield int(imer, base=len(aminoset))+1
 
 def reverse_complement(mer):
     """Return DNA reverse complement"""
@@ -156,11 +155,6 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
         sys.stderr.write(info%(datetime.ctime(datetime.now()), tmpfiles))
     # open tempfiles
     files = [tempfile.NamedTemporaryFile(dir=tmpdir, delete=0) for i in xrange(tmpfiles)]
-    """# and link every possible kmer to file - should pay off 
-    mer2file = {} #py2.6 compatible
-    for i in xrange(merspace):
-        mer2file[encode(i, alphabet, 5)] = files[i%len(alphabet)]
-    """
     #hash sequences
     i = 0
     for i, (seqid, seq) in enumerate(parser, 1):
@@ -168,10 +162,6 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
             sys.stderr.write(" %s\r"%i)
             #break
         for mer in seq2mers(seq, kmer, step, alphabetset):
-            """# catch wrong kmers 
-            if mer in mer2file:
-                mer2file[mer%len(files)].write("%s\t%s\n"%(mer, seqid))
-            """
             files[mer%len(files)].write("%s\t%s\n"%(mer, seqid))
     #get seqlimit
     seqlimit = int(kmerfrac * i / 100)
@@ -323,7 +313,7 @@ def dbConnect_sqlite(db, table, kmer, verbose, replace):
     cur.execute("CREATE TABLE %s (hash INT(%s), protids array)"%(table, kmer))
     return cur
             
-def main():
+def main(): 
     import argparse
     usage   = "%(prog)s -v"
     parser  = argparse.ArgumentParser(usage=usage, description=desc, epilog=epilog)

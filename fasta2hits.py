@@ -307,7 +307,7 @@ def get_random_sequence(cur, db, n, nprotids, seqcmd, verbose):
         seqs = "".join(seqs)
     return seqs
         
-def main():
+def main(): 
     #compatible with Python2.6 without argparse
     import argparse
     usage   = "%(prog)s -v"
