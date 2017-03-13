@@ -1,10 +1,5 @@
 #!/usr/bin/env python
 desc="""Parse NCBI taxdump and report taxonomy table.
-
-###
-#Recommended usage (~20m):
-./ncbitaxonomy2taxa.py -v | sqlite3 -separator $'\\t' taxonomy.db3 '.import /dev/stdin taxa_info' 
-###
 """
 epilog="""Author:
 l.p.pryszcz@gmail.com
@@ -12,13 +7,16 @@ l.p.pryszcz@gmail.com
 Mizerow, 28/02/2014
 """
 
-import argparse, gzip, os, sys
+import argparse, gzip, os, sys, subprocess
 from datetime import datetime
 import tarfile
 from string import strip
 
-def ncbitaxonomy2taxa(taxdump, out, verbose):
+def ncbitaxonomy2taxa(taxdump, out, verbose, dbname="taxonomy.db3"):
     """Parse taxdump for NCBI and report taxa.gz."""
+    args = ["sqlite3", dbname]
+    sqlite3 = subprocess.Popen(args, stdin=subprocess.PIPE)
+    out = sqlite3.stdin
     # prepare db
     cmds = ['create table taxa_info (taxid INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT, rank TEXT)',
             '.separator "\t"','.import /dev/stdin taxa_info']
@@ -47,6 +45,7 @@ def ncbitaxonomy2taxa(taxdump, out, verbose):
     for i, line in enumerate(tar.extractfile(m), 1):
         if verbose and not i%10000:
             sys.stderr.write(" %s \r"%i)
+            break
         fields =  map(strip, line.split("|"))        
         if fields[3] == "scientific name":
             taxid = int(fields[0])
@@ -65,6 +64,7 @@ def ncbitaxonomy2taxa(taxdump, out, verbose):
     '''
     #close output
     out.close()
+    sqlite3.terminate()
 
 def main():
     usage  = "src/%(prog)s -v"
