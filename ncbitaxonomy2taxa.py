@@ -1,5 +1,13 @@
 #!/usr/bin/env python
 desc="""Parse NCBI taxdump and report taxonomy table.
+
+###
+# Recommended usage (~20m):
+sqlite3 taxonomy.db3 "create table taxa_info (taxid INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT, rank TEXT)"
+./ncbitaxonomy2taxa.py -v | sqlite3 taxonomy.db3 '.import /dev/stdin taxa_info' 
+sqlite3 taxonomy.db3 "create table gi2taxid  (gi INTEGER PRIMARY KEY, taxid INTEGER)"
+wget -O- ftp://ftp.ncbi.nih.gov/pub/taxonomy/gi_taxid_????.dmp.gz | zcat | sed 's/\t/|/g' | sqlite3 taxonomy.db3 '.import /dev/stdin gi2taxid'
+###
 """
 epilog="""Author:
 l.p.pryszcz@gmail.com
@@ -7,20 +15,15 @@ l.p.pryszcz@gmail.com
 Mizerow, 28/02/2014
 """
 
-import argparse, gzip, os, sys, subprocess
+import argparse, gzip, os, sys
 from datetime import datetime
 import tarfile
 from string import strip
 
-def ncbitaxonomy2taxa(taxdump, out, verbose, dbname="taxonomy.db3"):
+def ncbitaxonomy2taxa(taxdump, out, verbose):
     """Parse taxdump for NCBI and report taxa.gz."""
-    args = ["sqlite3", dbname]
-    sqlite3 = subprocess.Popen(args, stdin=subprocess.PIPE)
-    out = sqlite3.stdin
     # prepare db
-    cmds = ['create table taxa_info (taxid INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT, rank TEXT)',
-            '.separator "\t"','.import /dev/stdin taxa_info']
-    out.write("\n".join(cmds))    
+    
     #fetch taxdump.tar.gz
     if not os.path.isfile(os.path.basename(taxdump)):
         os.system('wget %s'%taxdump)
@@ -45,26 +48,14 @@ def ncbitaxonomy2taxa(taxdump, out, verbose, dbname="taxonomy.db3"):
     for i, line in enumerate(tar.extractfile(m), 1):
         if verbose and not i%10000:
             sys.stderr.write(" %s \r"%i)
-            break
         fields =  map(strip, line.split("|"))        
         if fields[3] == "scientific name":
             taxid = int(fields[0])
             name  = fields[1]
             ptaxid, rank = taxid2data[taxid]
-            out.write("%s\t%s\t%s\t%s\n"%(taxid, ptaxid, name, rank))
-    '''# gi2taxid
-    cmds = ['create table gi2taxid (gi INTEGER PRIMARY KEY, taxid INTEGER)\n',
-            '.separator "\t"','.import /dev/stdin gi2taxid']
-    out.write("\n".join(cmds)) 
-    # upload
-    #os.system("wget -O- ftp://ftp.ncbi.nih.gov/pub/taxonomy/gi_taxid_????.dmp.gz | zcat | sqlite3 -separator $'\\t' taxonomy.db3 '.import /dev/stdin gi2taxid')
-    req = urllib2.Request(url) #data
-    response = urllib2.urlopen(req)
-    # need to read url, gunzip and stream to sqlite3
-    '''
+            out.write("%s|%s|%s|%s\n"%(taxid, ptaxid, name, rank))
     #close output
     out.close()
-    sqlite3.terminate()
 
 def main():
     usage  = "src/%(prog)s -v"
