@@ -3,10 +3,7 @@ desc="""Parse NCBI taxdump and report taxonomy table.
 
 ###
 #Recommended usage (~20m):
-sqlite3 taxonomy.db3 "create table taxa_info (taxid INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT, rank TEXT)"
-src/ncbitaxonomy2taxa.py -v | sqlite3 -separator $'\\t' taxonomy.db3 '.import /dev/stdin taxa_info' 
-sqlite3 taxonomy.db3 "create table gi2taxid  (gi INTEGER PRIMARY KEY, taxid INTEGER)"
-wget -O- ftp://ftp.ncbi.nih.gov/pub/taxonomy/gi_taxid_????.dmp.gz | zcat | sqlite3 -separator $'\\t' taxonomy.db3 '.import /dev/stdin gi2taxid'
+./ncbitaxonomy2taxa.py -v | sqlite3 -separator $'\\t' taxonomy.db3 '.import /dev/stdin taxa_info' 
 ###
 """
 epilog="""Author:
@@ -22,6 +19,10 @@ from string import strip
 
 def ncbitaxonomy2taxa(taxdump, out, verbose):
     """Parse taxdump for NCBI and report taxa.gz."""
+    # prepare db
+    cmds = ['create table taxa_info (taxid INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT, rank TEXT)',
+            '.separator "\t"','.import /dev/stdin taxa_info']
+    out.write("\n".join(cmds))    
     #fetch taxdump.tar.gz
     if not os.path.isfile(os.path.basename(taxdump)):
         os.system('wget %s'%taxdump)
@@ -52,6 +53,16 @@ def ncbitaxonomy2taxa(taxdump, out, verbose):
             name  = fields[1]
             ptaxid, rank = taxid2data[taxid]
             out.write("%s\t%s\t%s\t%s\n"%(taxid, ptaxid, name, rank))
+    '''# gi2taxid
+    cmds = ['create table gi2taxid (gi INTEGER PRIMARY KEY, taxid INTEGER)\n',
+            '.separator "\t"','.import /dev/stdin gi2taxid']
+    out.write("\n".join(cmds)) 
+    # upload
+    #os.system("wget -O- ftp://ftp.ncbi.nih.gov/pub/taxonomy/gi_taxid_????.dmp.gz | zcat | sqlite3 -separator $'\\t' taxonomy.db3 '.import /dev/stdin gi2taxid')
+    req = urllib2.Request(url) #data
+    response = urllib2.urlopen(req)
+    # need to read url, gunzip and stream to sqlite3
+    '''
     #close output
     out.close()
 
