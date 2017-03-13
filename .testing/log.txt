@@ -11,6 +11,10 @@ Options: Namespace(cmd='SELECT protid, seq FROM protid2seq', db='test/sprot.gz.d
 #Time elapsed: 0:12:31.289764
 
 
+#v1.3 v1.4 11:8
+  3158 test/test.fa.out3
+  2667 test/test.fa.out4
+
 
 ##BLAST
 #33:27 #need to edit blastdb/nr.fa.pal and remove blastdb/ from all lines
