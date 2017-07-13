@@ -31,7 +31,13 @@ The search consists of two steps (`fasta2hits.py`):
 ## Prerequisites
 - Python 2.7+ & Biopython 1.6+ `sudo easy_install -U biopython`
 - [BLAT](https://genome.ucsc.edu/FAQ/FAQblat.html#blat3)
+- [MySQLdb](http://mysql-python.sourceforge.net/MySQLdb.html) and/or [sqlite3](https://sqlite.org/) depending which engine you prefer to use
 - [bgzip](http://blastedbio.blogspot.com/2011/11/bgzf-blocked-bigger-better-gzip.html) (for running test set) `sudo apt-get install tabix`
+
+All above can be installed easily with [bioconda](https://bioconda.github.io/):
+```bash
+conda install biopython blat sqlite mysql-python htslib
+```
 
 ## Running the program
 RapSi input consists of either FASTA-formatted file(s) or connection information to MySQL DB storing sequences. First, the program will hash the set of targets (`fasta2hash.py`) and store it in SQLite or MySQL DB (depending on input used).
@@ -166,10 +172,10 @@ awk '$1==$2' test/test.fa.out | wc -l
 - test using pre-compiled db with over 18M targets (MetaPhOrs)
 ```bash
 # get 100 random sequences
-./fasta2hits.py --random 100 > test/test.fa
+./fasta2hits.py --random 100 > test/test.remote.fa
 
 # search agains remote db
-./fasta2hits.py -i test/test.fa -o test/test.fa.out
+./fasta2hits.py -i test/test.remote.fa -o test/test.remote.fa.out
 ```
 
 ## Citation
