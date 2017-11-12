@@ -1,5 +1,9 @@
 #!/usr/bin/env python
 desc="""Generate hash table and load it to db.
+
+TBD:
+- recode di-nucleotides at A-Z characters
+- split entries into 10k chunks (or 1k?)
 """
 epilog="""Author:
 l.p.pryszcz@gmail.com
@@ -26,6 +30,10 @@ mj5 = {'A': 1, 'C': 1, 'E': 4, 'D': 4, 'G': 2, 'F': 0, 'I': 0, 'H': 2, 'K': 3, '
 ## MFILV, A, C, WYQHPGTSN, RK, DE
 mj6 = {'A': 1, 'C': 2, 'E': 5, 'D': 5, 'G': 3, 'F': 0, 'I': 0, 'H': 3, 'K': 4, 'M': 0, 'L': 0, 'N': 3, 'Q': 3, 'P': 3, 'S': 3, 'R': 4, 'T': 3, 'W': 3, 'V': 0, 'Y': 3}
 reduced_alphabet = mj6
+
+# recode di-nucleotides as base16 (0-F) characters
+di4 = {'AA': '0', 'AC': '1', 'GT': 'B', 'AG': '2', 'CC': '5', 'CA': '4', 'CG': '6', 'TT': 'F', 'GG': 'A', 'GC': '9', 'AT': '3', 'GA': '8', 'TG': 'E', 'TA': 'C', 'TC': 'D', 'CT': '7'}
+reduced_dna_alphabet = di4
 
 def memory_usage():
     """Return memory usage in MB"""
@@ -60,16 +68,21 @@ def reverse_complement(mer):
     """Return DNA reverse complement"""
     return "".join(DNAcomplement[b] for b in reversed(mer))
     
-def dnaseq2mers(seq, kmer, step, nucleotideset=set(nucleotides)):
+def dnaseq2mers(seq, kmer, step, baseset=set(reduced_dna_alphabet.values())):
     """Kmers generator for DNA seq"""
-    mers = set()
-    for s in xrange(0, len(seq)-kmer, step):
-        mer = seq[s:s+kmer]
+    # di-nucleotides - shift by one to make sure both variants will be present
+    mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step)) + set(seq[s:s+kmer] for s in xrange(1, len(seq)-kmer, step))
+    for mer in mers:
         #store reverse complement
         if mer > reverse_complement(mer):
             mer = reverse_complement(mer)
-        mers.add(mer)
-    return mers
+        # get mer as int with given base (dinucleotide)
+        imer = "".join(map(str, (reduced_dna_alphabet[mer[i:i+2]] for i in range(0, mer, 2) if mer[i:i+2] in reduced_dna_alphabet)))
+        # catch wrong kmers
+        if len(imer)*2!=len(mer):
+            continue
+        # avoid 0
+        yield int(mer, base=len(baseset))+1
 
 def get_seq_offset_length(handle):
     """Return entry start offset and sequence. BGZIP compatible.
@@ -112,6 +125,7 @@ def fasta_parser(fastas, cur, verbose):
             handle = open(fn)
         #parse entries
         for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
+            # chop sequences into 10k pieces!
             #if i>10**6: break
             seqlen += len(seq)
             cur.execute(cmd, (i, fi, offset, elen))
