@@ -2,7 +2,7 @@
 desc="""Parse NCBI taxdump and report taxonomy table.
 
 ###
-# Recommended usage (~20m):
+# Recommended usage (~10-20m depending on your Internet connection):
 sqlite3 taxonomy.db3 "create table taxa_info (taxid INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT, rank TEXT)"
 ./ncbitaxonomy2taxa.py -v | sqlite3 taxonomy.db3 '.import /dev/stdin taxa_info' 
 sqlite3 taxonomy.db3 "create table gi2taxid  (gi INTEGER PRIMARY KEY, taxid INTEGER)"
