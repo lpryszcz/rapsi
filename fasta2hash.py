@@ -134,7 +134,7 @@ def fasta_parser(fastas, cur, verbose):
         cur.execute("INSERT INTO file_data VALUES (?, ?)", (fi, fn))
         #get handle and start byte
         if fn.endswith('.gz'):
-            handle = bgzf.open(fn, buffering=1) 
+            handle = bgzf.open(fn) 
         else:
             handle = open(fn)
         #parse entries
