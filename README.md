@@ -46,7 +46,10 @@ Later, the target sequences can be search for similarity with FASTA or FASTQ-for
 ### Parameters
 
 #### fasta2hash.py
-`fasta2hash.py` hash the database of targets and stores hash information in MySQL/SQLite. By default, words of five amino acids (k<sub>H</sub>=5) sliding by one (s<sub>H</sub>=1) are used. Such parameters provide good equilibrium between sensitivity and speed, because 3.2x10<sup>6</sup> possible words (20<sup>5</sup>) can be easily stored and quickly accessed. For the sake of performance, we ignore too common words ie. found in more than 0.05% target sequences, as these bring little information and may negatively affect performance. 
+`fasta2hash.py` hash the database of targets and stores hash information in MySQL/SQLite.
+By default, words of five amino acids (k<sub>H</sub>=5) sliding by one (s<sub>H</sub>=1) are used (need update, as currenyly reduced alphabet is used!).
+Such parameters provide good equilibrium between sensitivity and speed, because 3.2x10<sup>6</sup> possible words (20<sup>5</sup>) can be easily stored and quickly accessed.
+For the sake of performance, we ignore too common words ie. found in more than 0.05% target sequences, as these bring little information and may negatively affect performance. 
 
 - Genral options:
 ```
@@ -156,17 +159,20 @@ In order to test the programme, execute following code:
 mkdir test
 wget -O- ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz | zcat | bgzip > test/sprot.gz
 
-# hash database [this make take some minutes]
+# hash database [this make take ~14min]
 ./fasta2hash.py -v -i test/sprot.gz -d test/sprot.gz.db3
 
-# get 100 random sequences from db
+# get 100 random sequences from db [0.02s]
 ./fasta2hits.py -v --random 100 -d test/sprot.gz.db3 > test/test.fa
 
-# search agains db
+# search 100 seqs agains db [~2s]
 ./fasta2hits.py -v -i test/test.fa -d test/sprot.gz.db3 -o test/test.fa.out
 
 # check if all targets aligned by comparing query and target ID
 awk '$1==$2' test/test.fa.out | wc -l
+
+# to further speed up analysis, queries can be groupped in batches of 10 [0.7s]
+b=10; ./fasta2hits.py -b $b --seqlimit 500 -n 500 -i test/test.fa -d test/sprot.gz.db3 -o test/test.fa.b$b.out; awk '$1==$2' test/test.fa.b$b.out | wc -l
 ```
 
 - test using pre-compiled db with over 18M targets (MetaPhOrs)
@@ -176,6 +182,19 @@ awk '$1==$2' test/test.fa.out | wc -l
 
 # search agains remote db
 ./fasta2hits.py -i test/test.remote.fa -o test/test.remote.fa.out
+```
+
+- DNA searches
+```bash
+# ECOLI
+f=test/ECOLI.fa
+./fasta2hash.py -v --dna -i $f -d $f.db3 # 28s
+samtools faidx $f 'Chromosome:50040-100080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
+
+# hg19
+f=test/hg19.fa
+./fasta2hash.py -v --dna -i $f -d $f.db3
+samtools faidx $f 'Chromosome:50040-100080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
 ```
 
 ## Citation

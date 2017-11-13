@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 desc="""Generate hash table and load it to db.
 
-TBD:
-- recode di-nucleotides at A-Z characters
-- split entries into 10k chunks (or 1k?)
+Using reduced amino alphabet and recoding DNA bases as dinucleotides.
+In addition, sequences longer than 40K are divided into chunks.
+
+Limits:
+- uint32 seq chunks
 """
 epilog="""Author:
 l.p.pryszcz@gmail.com
@@ -22,7 +24,7 @@ from multiprocessing import Pool, Process, Queue
 aminos = 'ACDEFGHIKLMNPQRSTVWY'
 aminoset = set(aminos)
 nucleotides = 'ACGT'
-DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 'N': 'N'}
 
 # http://www.rpgroup.caltech.edu/publications/supplements/alphabets/HP/Welcome.html
 ## MFILV, ACW, YQHPGTSN, RK, DE
@@ -71,41 +73,53 @@ def reverse_complement(mer):
 def dnaseq2mers(seq, kmer, step, baseset=set(reduced_dna_alphabet.values())):
     """Kmers generator for DNA seq"""
     # di-nucleotides - shift by one to make sure both variants will be present
-    mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step)) + set(seq[s:s+kmer] for s in xrange(1, len(seq)-kmer, step))
+    mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))#.union(seq[s:s+kmer] for s in xrange(1, len(seq)-kmer, step))
     for mer in mers:
         #store reverse complement
         if mer > reverse_complement(mer):
             mer = reverse_complement(mer)
         # get mer as int with given base (dinucleotide)
-        imer = "".join(map(str, (reduced_dna_alphabet[mer[i:i+2]] for i in range(0, mer, 2) if mer[i:i+2] in reduced_dna_alphabet)))
+        imer = "".join(map(str, (reduced_dna_alphabet[mer[i:i+2]] for i in range(0, kmer, 2) if mer[i:i+2] in reduced_dna_alphabet)))
         # catch wrong kmers
         if len(imer)*2!=len(mer):
             continue
         # avoid 0
-        yield int(mer, base=len(baseset))+1
+        yield int(imer, base=len(baseset))+1
 
-def get_seq_offset_length(handle):
-    """Return entry start offset and sequence. BGZIP compatible.
+def get_seq_offset_length(handle, chunksize=50000):
+    """Return name, sequence, entry start offset and length. BGZIP compatible. 
     #http://biopython.org/DIST/docs/api/Bio.File-pysrc.html#_SQLiteManySeqFilesDict.__init__
     """
-    soffset = eoffset = handle.tell()
-    seq = []
-    for line in handle:
+    name, pstart, length, seq = '', 0, 0, []
+    #for line in handle:
+    while True: # buffering = 1 doesn't work, so need while
+        line = handle.readline()
+        if not line:
+            break
         if line.startswith(">"):
             if seq:
-                yield "".join(seq), soffset, length
-            seq = []
-            length = len(line)
-            soffset = eoffset
-        else:
+                _seq = "".join(seq)
+                yield "%s:%s-%s"%(name, pstart, pstart+len(_seq)), _seq, soffset, length
+            # new name and reset sequence
+            name, pstart, length, seq = line[1:].split()[0], 0, 0, []
+            soffset = handle.tell()
+        else:  
             seq.append(line.strip())
             length += len(line)
-            eoffset = handle.tell()
+            # report seq chunk
+            if sum(map(len, seq))>chunksize:
+                _seq = "".join(seq)
+                yield "%s:%s-%s"%(name, pstart, pstart+len(_seq)), _seq, soffset, length
+                pstart += len(_seq)
+                seq, length = [], 0
+                soffset = handle.tell()
+                
     if seq:
-        yield "".join(seq), soffset, length
+        _seq = "".join(seq)
+        yield "%s:%s-%s"%(name, pstart, pstart+len(_seq)), _seq, soffset, length
     
 def fasta_parser(fastas, cur, verbose):
-    """Fasta iterator returning i, seqid as base64 and sequence str.
+    """Fasta iterator returning seqid as base64 and sequence str.
     Index sequence using proprietrary parser.
     Handle bgzip compressed files.
     """
@@ -114,21 +128,20 @@ def fasta_parser(fastas, cur, verbose):
     #parse fasta
     i = 0
     seqlen = 0
-    cmd = "INSERT INTO offset_data VALUES (?, ?, ?, ?)"
+    cmd = "INSERT INTO offset_data VALUES (?, ?, ?, ?, ?)"
     for fi, fn in enumerate(fastas):
         #add file to db
         cur.execute("INSERT INTO file_data VALUES (?, ?)", (fi, fn))
         #get handle and start byte
         if fn.endswith('.gz'):
-            handle = bgzf.open(fn)
+            handle = bgzf.open(fn, buffering=1) 
         else:
             handle = open(fn)
         #parse entries
-        for i, (seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
-            # chop sequences into 10k pieces!
+        for i, (name, seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
             #if i>10**6: break
             seqlen += len(seq)
-            cur.execute(cmd, (i, fi, offset, elen))
+            cur.execute(cmd, (i, fi, name, offset, elen))
             yield i, seq
     if verbose:
         sys.stderr.write(" %s letters in"%seqlen)
@@ -139,7 +152,7 @@ def fasta_parser(fastas, cur, verbose):
     cur.connection.commit()
 
 def db_seq_parser(cur, cmd, verbose):
-    """Database iterator returning i, seqid and seq"""
+    """Database iterator returning seqid and seq"""
     l = cur.execute(cmd) 
     if verbose:
         sys.stderr.write("[%s] Hashing sequences...\n"%datetime.ctime(datetime.now()))
@@ -150,13 +163,13 @@ def db_seq_parser(cur, cmd, verbose):
         yield seqid, seq
     if verbose:
         sys.stderr.write(" %s letters in"%seqlen)
-        
+    
 def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
                    tmpfiles=1000, verbose=1):
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
-        alphabet = nucleotides
+        alphabet = reduced_dna_alphabet.values()
         seq2mers = dnaseq2mers
         merspace = len(alphabet)**kmer/2 #reverse complement
     else:
@@ -175,11 +188,12 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
         if verbose and not i%1e3:
             sys.stderr.write(" %s\r"%i)
             #break
-        for mer in seq2mers(seq, kmer, step, alphabetset):
+        # get mers from upper-case seq
+        for mer in seq2mers(seq.upper(), kmer, step, alphabetset):
             files[mer%len(files)].write("%s\t%s\n"%(mer, seqid))
-    #get seqlimit
-    seqlimit = int(kmerfrac * i / 100)
-    info = " %s sequences [memory: %s MB]\n Setting seqlimit to: %s\n"
+    # set seqlimit only if >10k sequences
+    seqlimit = int(round(kmerfrac * i / 100)) if i > 1e5 else i
+    info = " %s sequences / chunks [memory: %s MB]\n Setting seqlimit to: %s\n"
     sys.stderr.write(info%(i, memory_usage(), seqlimit))
     return files, seqlimit
     
@@ -323,7 +337,7 @@ def dbConnect_sqlite(db, table, kmer, verbose, replace):
     #prepare tables and indices PRIMARY KEY
     cur.execute("CREATE TABLE meta_data (key TEXT, value TEXT)")
     cur.execute("CREATE TABLE file_data (file_number INTEGER, name TEXT)")
-    cur.execute("CREATE TABLE offset_data (key INTEGER PRIMARY KEY, file_number INTEGER, offset INTEGER, length INTEGER)")
+    cur.execute("CREATE TABLE offset_data (key INTEGER PRIMARY KEY, file_number INTEGER, seqname TEXT, offset INTEGER, length INTEGER)")
     cur.execute("CREATE TABLE %s (hash INT(%s), protids array)"%(table, kmer))
     return cur
             

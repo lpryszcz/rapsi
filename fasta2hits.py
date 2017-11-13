@@ -34,17 +34,17 @@ def sqlite2seq(cur, db, protids):
             files[name] =      open(fpath)
 
     #get targets
-    cmd = """SELECT f.name, offset, length FROM offset_data o JOIN file_data f
+    cmd = """SELECT f.name, seqname, offset, length FROM offset_data o JOIN file_data f
     ON o.file_number=f.file_number WHERE key IN (%s)""" % ",".join(str(p) for p in protids)
     cur.execute(cmd)
     targets = []
-    for name, offset, length in sorted(cur.fetchall()):
+    for fname, seqname, offset, length in sorted(cur.fetchall()):
         try:
-            files[name].seek(offset)
-            targets.append(files[name].read(length))
+            files[fname].seek(offset)
+            targets.append(">%s\n%s"%(seqname, files[fname].read(length)))
         except:
-            #bgzip sometimes doesn't work at first seek
-            sys.stderr.write("[Warning] Cannot fetch sequence for %s at %s + %s bytes\n"%(name, offset, length))
+            # bgzip sometimes doesn't work at first seek
+            sys.stderr.write("[Warning] Cannot fetch sequence %s from %s at %s + %s bytes\n"%(seqname, fname, offset, length))
     return "".join(targets)
 
 def mysql2seq(cur, protids, seqcmd):
@@ -77,13 +77,13 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
         cur.execute(cmd)
         protids = {}
         for merprotids, in cur:
-            #unpack numpy object
+            # unpack numpy object
             for protid in np.fromstring(merprotids, dtype=dtype):
                 if protid not in protids:
                     protids[protid]  = 1
                 else:
                     protids[protid] += 1
-        #select upto 100 best seqs with most kmers matching
+        # select upto 100 best seqs with most kmers matching
         fprotids = protids
         if len(fprotids)>seqlimit:
             counts = [0]*(max(protids.itervalues())+1)
@@ -169,8 +169,12 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
         bitscore = (Lambda*score-math.log(K))/math.log(2)
         pvalue = evalue = 0
         if dblength:
-            pvalue = 2**-bitscore
-            evalue = len(qseqs[0]) * dblength * pvalue
+            try:
+                pvalue = 2**-bitscore
+                evalue = len(qseqs[0]) * dblength * pvalue
+            except Exception, e:
+                sys.stderr.write("[WARNING] E-value estimation failed: %s\n"%str(e))
+                pvalue = evalue = 0
         #get t and q ranges
         qranges  = get_ranges(qstarts, bsizes)
         tranges  = get_ranges(tstarts, bsizes)
