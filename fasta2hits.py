@@ -112,6 +112,12 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
     else:
         targets = sqlite2seq(cur, db, fprotids)
     return targets
+
+def get_seq_offset(name):
+    """Return sequence chunk offset ie. for chr1:1000-2000 return 1000"""
+    if "-" in name and ":" in name and name.split(":")[-1].split("-")[0].isdigit():
+        return name.split(":")[0], int(name.split(":")[-1].split("-")[0])
+    return name, 0
     
 def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbose, \
               Lambda=0.318, K=0.13):
@@ -133,7 +139,7 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
     #run blat
     tmpr = "%s.out" % tmpfn
     if dna:
-        cmd  = "%s -q=dna -t=dna -noHead %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
+        cmd  = "%s -q=dna -t=dna -noHead -extendThroughN %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
     else:
         cmd  = "%s -prot -noHead %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
     if verbose:
@@ -159,35 +165,38 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
         qstart, qend = int(qstart), int(qend)
         qstart, qend, qsize = int(qstart), int(qend), int(qsize)
         tstart, tend, tsize = int(tstart), int(tend), int(tsize)
-        #get score, identity & overlap
+        # get score, identity & overlap
         #score    = matches * 2 + mismatches * -1.5 + Tgapc * -11 + Tgaps * -1
         score    = matches * 5 + mismatches * -3 + Tgapc * -4 + Tgaps * -1
         alglen   = int(tend) - int(tstart)
         identity = 100.0 * matches / alglen
         overlap  = 100.0 * alglen / tsize
-        #bitscore & evalue
+        # bitscore & evalue
         bitscore = (Lambda*score-math.log(K))/math.log(2)
         pvalue = evalue = 0
         if dblength:
+            # catch overflow exception
             try:
                 pvalue = 2**-bitscore
                 evalue = len(qseqs[0]) * dblength * pvalue
             except Exception, e:
                 sys.stderr.write("[WARNING] E-value estimation failed: %s\n"%str(e))
                 pvalue = evalue = 0
-        #get t and q ranges
+        # get t and q ranges
         qranges  = get_ranges(qstarts, bsizes)
-        tranges  = get_ranges(tstarts, bsizes)
-        #if link provided, convert t into html link 
+        # get target offset if sequence chunk
+        t, toffset = get_seq_offset(t)
+        tranges  = get_ranges(tstarts, bsizes, toffset+1)
+        # if link provided, convert t into html link 
         if link:
             tlink = link % tuple([t]*link.count('%s'))
         else:
             tlink = t
-        #yield if next query and any algs
+        # yield if next query and any algs
         if q!=pq and algs:
             yield sorted(algs, key=lambda x: x[4], reverse=True)
             algs = []
-        #add alg to list
+        # add alg to list
         pq = q
         algs.append((q, tlink, round(identity,1), round(overlap,1), round(bitscore,2),\
                      "%.3g"%evalue, mismatches, Tgaps, alglen, qranges, tranges))

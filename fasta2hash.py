@@ -24,7 +24,7 @@ from multiprocessing import Pool, Process, Queue
 aminos = 'ACDEFGHIKLMNPQRSTVWY'
 aminoset = set(aminos)
 nucleotides = 'ACGT'
-DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 'N': 'N'}
+DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
 
 # http://www.rpgroup.caltech.edu/publications/supplements/alphabets/HP/Welcome.html
 ## MFILV, ACW, YQHPGTSN, RK, DE
@@ -68,7 +68,7 @@ def aaseq2mers(seq, kmer, step, aminoset=set(reduced_alphabet.values())):
 
 def reverse_complement(mer):
     """Return DNA reverse complement"""
-    return "".join(DNAcomplement[b] for b in reversed(mer))
+    return "".join(DNAcomplement[b] for b in reversed(mer) if b in DNAcomplement)
     
 def dnaseq2mers(seq, kmer, step, baseset=set(reduced_dna_alphabet.values())):
     """Kmers generator for DNA seq"""
@@ -81,7 +81,7 @@ def dnaseq2mers(seq, kmer, step, baseset=set(reduced_dna_alphabet.values())):
         # get mer as int with given base (dinucleotide)
         imer = "".join(map(str, (reduced_dna_alphabet[mer[i:i+2]] for i in range(0, kmer, 2) if mer[i:i+2] in reduced_dna_alphabet)))
         # catch wrong kmers
-        if len(imer)*2!=len(mer):
+        if len(imer)*2!=kmer:
             continue
         # avoid 0
         yield int(imer, base=len(baseset))+1
