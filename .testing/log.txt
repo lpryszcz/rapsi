@@ -1,3 +1,21 @@
+## v1.5
+# ECOLI
+f=test/ECOLI.fa
+./fasta2hash.py -v --dna -i $f -d $f.db3 # 28s
+samtools faidx $f 'Chromosome:50040-100080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
+
+# A. thaliana
+f=test/Ath.fa
+./fasta2hash.py -v --dna -i $f -d $f.db3 # 9min
+samtools faidx $f 'ENA|CP002684|CP002684.1:10000-100080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
+
+# hg19
+f=test/hg19.fa
+./fasta2hash.py -v --dna -i $f -d $f.db3 # 7h
+samtools faidx $f 'chr1:10000-200080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
+
+
+
 ## v1.4
 rm test/sprot.gz.db4 && ./fasta2hash.py -v -i test/sprot.gz -d test/sprot.gz.db4
 Options: Namespace(cmd='SELECT protid, seq FROM protid2seq', db='test/sprot.gz.db4', dna=False, dtype='uint32', host='localhost', input=['test/sprot.gz'], kmer=10, kmerfrac=0.05, notempfile=False, nprocs=4, port=4042, pswd=None, replace=False, step=1, table='hash2protids', tempfiles=1000, tmpdir='/tmp', user='lpryszcz', verbose=True)

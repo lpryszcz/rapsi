@@ -5,7 +5,7 @@ sequences, sequence sampling is recommended.
 epilog="""Author:
 l.p.pryszcz@gmail.com
 
-Barcelona/Mizerow, 13/11/2013
+Barcelona/Mizerow/Warsaw, 13/11/2013
 """
 
 import commands, gzip, math, os, sys, time
@@ -15,10 +15,55 @@ from datetime import datetime
 from Bio import SeqIO, bgzf
 from htmlTable import htmlTable
 from fasta2hash import dnaseq2mers, aaseq2mers
+
+def coordinate2chr_start_end(name):
+    """Unload coordinate info ie. for chr1:1000-2000 return chr1, 1000, 2000"""
+    if "-" in name and ":" in name and len(name.split(":"))==2:
+        chrname, se = name.split(":") #and name.split(":")[-1].split("-")[0].isdigit():
+        if len(se.split('-'))==2 and se.split('-')[0].isdigit() and se.split('-')[1].isdigit():
+            s, e = map(int, se.split('-'))
+            return chrname, s, e
+    return name, 0, 0
+
+def chunks2consecutive(chunks):
+    """Yield consecutive chunks"""
+    # combine chunks by chr
+    chr2chunks = {}
+    for fname, seqname, offset, length in chunks:
+        n, s, e = coordinate2chr_start_end(seqname)
+        if n not in chr2chunks:
+            chr2chunks[n] = []
+        chr2chunks[n].append((s, e, fname, offset, length))
+    # get consecutive
+    for n, chunks in chr2chunks.iteritems():
+        chunks.sort()
+        _chunk = [chunks[0]]
+        for data in chunks[1:]:
+            # report if not consecutive
+            if data[0] >_chunk[-1][1]+1:
+                yield n, _chunk
+                _chunk = []
+            # add new data
+            _chunk.append(data)
+        yield n, _chunk
         
+def chunks2combined(orgchunks, files):
+    """Combine neighbouring FastA chunks"""
+    # combine seq of consecutive chunks
+    for n, chunks in chunks2consecutive(orgchunks):
+        seqs = []
+        for s, e, fname, offset, length in chunks:
+            try:
+                files[fname].seek(offset)
+                seqs.append(files[fname].read(length))
+            except:
+                # bgzip sometimes doesn't work at first seek
+                sys.stderr.write("[Warning] Cannot fetch sequence %s:%s-%s from %s at %s + %s bytes\n"%(n, s, e, fname, offset, length))
+        yield ">%s:%s-%s\n%s"%(n, chunks[0][0], chunks[-1][1], "".join(seqs))
+
 def sqlite2seq(cur, db, protids):
     """Return target fastas for protids from sqlite3."""
-    #open target files
+    # open target files
     cur.execute("SELECT name FROM file_data")
     files = {} #name: open(os.path.join(os.path.dirname(db), name)) for name, in cur.fetchall()}
     for name, in cur.fetchall():
@@ -33,19 +78,11 @@ def sqlite2seq(cur, db, protids):
         else:
             files[name] =      open(fpath)
 
-    #get targets
+    # get targets
     cmd = """SELECT f.name, seqname, offset, length FROM offset_data o JOIN file_data f
     ON o.file_number=f.file_number WHERE key IN (%s)""" % ",".join(str(p) for p in protids)
     cur.execute(cmd)
-    targets = []
-    for fname, seqname, offset, length in sorted(cur.fetchall()):
-        try:
-            files[fname].seek(offset)
-            targets.append(">%s\n%s"%(seqname, files[fname].read(length)))
-        except:
-            # bgzip sometimes doesn't work at first seek
-            sys.stderr.write("[Warning] Cannot fetch sequence %s from %s at %s + %s bytes\n"%(seqname, fname, offset, length))
-    return "".join(targets)
+    return "".join(fasta for fasta in chunks2combined(cur.fetchall(), files))
 
 def mysql2seq(cur, protids, seqcmd):
     """Return target fasta for protids from mysql."""
@@ -57,7 +94,7 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
                 seq2mers, dtype, verbose):
     """Return matching protids and sequences"""
     if verbose:
-        info = "Parsing %s aminos from %s sequences...\n"
+        info = "Parsing %s letters from %s sequence(s)...\n"
         sys.stderr.write(info % (len("".join(qseqs)), len(qseqs)))
     kmers = [] #set()
     for qseq in qseqs:
@@ -65,9 +102,11 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
     if verbose:
         sys.stderr.write("  %s mers\n"%sum(len(x) for x in kmers))
     fprotids = []
-    for sampling in samplings:
+    for fsampling in samplings:
         mers = []
         for qmers in kmers:
+            sampling = int(round(fsampling*len(qmers)))
+            if sampling<10: sampling = 10
             mers += qmers[:sampling]
         mers = set(mers)
         if verbose:
@@ -97,7 +136,7 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
             n = len(counts)-i
             fprotids = filter(lambda x: protids[x]>n, protids)
             if verbose:
-                sys.stderr.write("   %8i protids having %s+ kmer matches.\n"% (len(fprotids), n))
+                sys.stderr.write("   %8i entries having %s+ kmer matches.\n"% (len(fprotids), n))
         if fprotids:
             break
     #return None if no kmer matches
@@ -112,12 +151,6 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
     else:
         targets = sqlite2seq(cur, db, fprotids)
     return targets
-
-def get_seq_offset(name):
-    """Return sequence chunk offset ie. for chr1:1000-2000 return 1000"""
-    if "-" in name and ":" in name and name.split(":")[-1].split("-")[0].isdigit():
-        return name.split(":")[0], int(name.split(":")[-1].split("-")[0])
-    return name, 0
     
 def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbose, \
               Lambda=0.318, K=0.13):
@@ -139,7 +172,8 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
     #run blat
     tmpr = "%s.out" % tmpfn
     if dna:
-        cmd  = "%s -q=dna -t=dna -noHead -extendThroughN %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
+        cmd  = "%s -q=dna -t=dna -noHead -extendThroughN -mask=lower %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
+        #cmd = "lastdb %s %s; lastal -l 100 %s %s | maf-convert psl - %s > %s" % (tmpt, tmpt, tmpt, tmpt, tmpq, tmpr)
     else:
         cmd  = "%s -prot -noHead %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
     if verbose:
@@ -160,17 +194,13 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
          qstarts, tstarts) = l.split('\t')
         #unpack batch
         q = ".".join(q.split('.')[:-1])
-        matches, mismatches = int(matches), int(mismatches)
-        Tgapc, Tgaps = int(Tgapc), int(Tgaps)
-        qstart, qend = int(qstart), int(qend)
-        qstart, qend, qsize = int(qstart), int(qend), int(qsize)
-        tstart, tend, tsize = int(tstart), int(tend), int(tsize)
+        matches, mismatches, Tgapc, Tgaps, Qgapc, Qgaps = map(int, (matches, mismatches, Tgapc, Tgaps, Qgapc, Qgaps))
+        qstart, qend, qsize, tstart, tend, tsize = map(int, (qstart, qend, qsize, tstart, tend, tsize))
         # get score, identity & overlap
-        #score    = matches * 2 + mismatches * -1.5 + Tgapc * -11 + Tgaps * -1
-        score    = matches * 5 + mismatches * -3 + Tgapc * -4 + Tgaps * -1
+        score    = matches * 5 + mismatches * -3 + (Tgapc+Qgapc) * -4 + Tgaps+Qgaps * -1
         alglen   = int(tend) - int(tstart)
         identity = 100.0 * matches / alglen
-        overlap  = 100.0 * alglen / tsize
+        overlap  = 100.0 * alglen / qsize
         # bitscore & evalue
         bitscore = (Lambda*score-math.log(K))/math.log(2)
         pvalue = evalue = 0
@@ -180,12 +210,12 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
                 pvalue = 2**-bitscore
                 evalue = len(qseqs[0]) * dblength * pvalue
             except Exception, e:
-                sys.stderr.write("[WARNING] E-value estimation failed: %s\n"%str(e))
+                #sys.stderr.write("[WARNING] E-value estimation failed: %s\n"%str(e))
                 pvalue = evalue = 0
         # get t and q ranges
         qranges  = get_ranges(qstarts, bsizes)
         # get target offset if sequence chunk
-        t, toffset = get_seq_offset(t)
+        t, toffset, _e = coordinate2chr_start_end(t)
         tranges  = get_ranges(tstarts, bsizes, toffset+1)
         # if link provided, convert t into html link 
         if link:
@@ -198,13 +228,14 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
             algs = []
         # add alg to list
         pq = q
-        algs.append((q, tlink, round(identity,1), round(overlap,1), round(bitscore,2),\
-                     "%.3g"%evalue, mismatches, Tgaps, alglen, qranges, tranges))
+        algs.append((q, tlink, round(identity, 1), round(overlap, 1), round(bitscore, 2),\
+                     "%.3g"%evalue, mismatches, Tgaps+Qgaps, alglen, strand, qranges, tranges))
     #yield last alg
     if algs:
         yield sorted(algs, key=lambda x: x[4], reverse=True)
     #clean-up
     if "Error:" not in blatout and "No such file" not in blatout:
+        return
         os.unlink(tmpq)
         os.unlink(tmpt)
         os.unlink(tmpr)
@@ -215,7 +246,7 @@ def get_ranges(starts, sizes, offset=1):
     for start, size in zip(starts.split(',')[:-1], sizes.split(',')[:-1]):
         start, size = int(start), int(size)
         start += offset
-        end = start + size - offset
+        end = start + size - 1
         coords = "%s-%s"%(start, end)
         ranges.append(coords)
     return " ".join(ranges)
@@ -227,7 +258,7 @@ def algs2formatted_output(algs, ifrac, ofrac, html, verbose, no_query):
     blastTable.style = "gtable"
     #add header
     headerNames = ["Query", "Target", "% identity", "% overlap", "Bit score", "E-value",\
-                   "Mis- matches", "Gaps", "Alg. length", "Q. ranges", "T. ranges"]
+                   "Mis- matches", "Gaps", "Alg. length", "Strand", "Q. ranges", "T. ranges"]
     for name in headerNames: 
         blastTable.add_cell(0, name)
     #add results
@@ -329,7 +360,7 @@ def main():
 
     seqformats = ['fasta', 'fastq', 'gb', 'genbank', 'embl']
     parser.add_argument("-v", dest="verbose",  default=False, action="store_true", help="verbose")    
-    parser.add_argument('--version', action='version', version='%(prog)s 1.4a')   
+    parser.add_argument('--version', action='version', version='%(prog)s 1.5a')   
     parser.add_argument("-i", "--input",     type=file, default=sys.stdin, 
                         help="fasta stream    [stdin]")
     parser.add_argument("-b", "--batch",     type=int, default=1, 
@@ -359,12 +390,12 @@ def main():
                         help="BLAT path       [%(default)s]")
     similo.add_argument("--tmpdir",          default='.', 
                         help="TEMP path       [%(default)s]")
-    similo.add_argument("-s", "--step",       default=5, type=int, 
+    similo.add_argument("-s", "--step",       default=10, type=int, 
                         help="hash steps      [%(default)s]")
     similo.add_argument("--seqlimit",         default=100, type=int, 
                         help="max. seqs to retrieve [%(default)s]")
-    similo.add_argument("-n", "--sampling",   nargs="*", default=[100], type=int,
-                        help="sample n kmers per query %(default)s")
+    similo.add_argument("-n", "--sampling",   nargs="*", default=[0.05], type=float,
+                        help="sample fraction of kmers per query %(default)s")
     similo.add_argument("--ifrac",            default=0.3, type=float, 
                         help="min. identity of best hit [%(default)s]")
     similo.add_argument("--ofrac",            default=0.3, type=float, 

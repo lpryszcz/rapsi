@@ -186,14 +186,14 @@ b=10; ./fasta2hits.py -b $b --seqlimit 500 -n 500 -i test/test.fa -d test/sprot.
 
 - DNA searches
 ```bash
-# ECOLI
-f=test/ECOLI.fa
-./fasta2hash.py -v --dna -i $f -d $f.db3 # 28s
-samtools faidx $f 'Chromosome:50040-100080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
+# A. thaliana
+f=test/Ath.fa
+./fasta2hash.py -v --dna -i $f -d $f.db3 # 9min
+samtools faidx $f 'ENA|CP002684|CP002684.1:10000-100080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
 
 # hg19
 f=test/hg19.fa
-./fasta2hash.py -v --dna -i $f -d $f.db3
+./fasta2hash.py -v --dna -i $f -d $f.db3 # 7h
 samtools faidx $f 'Chromosome:50040-100080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
 ```
 

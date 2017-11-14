@@ -10,7 +10,7 @@ Limits:
 epilog="""Author:
 l.p.pryszcz@gmail.com
 
-Barcelona/Mizerow, 13/11/2013
+Barcelona/Mizerow/Warsaw, 13/11/2013
 """
 
 import os, sys, time
@@ -347,7 +347,7 @@ def main():
     parser  = argparse.ArgumentParser(usage=usage, description=desc, epilog=epilog)
   
     parser.add_argument("-v", dest="verbose",  default=False, action="store_true", help="verbose")    
-    parser.add_argument('--version', action='version', version='1.4a')   
+    parser.add_argument('--version', action='version', version='%(prog)s 1.5a')   
     parser.add_argument("-i", "--input",      nargs="*",
                         help="fasta file(s)   [get seqs from db]")
     parser.add_argument("-k", "--kmer",       default=10, type=int, 
