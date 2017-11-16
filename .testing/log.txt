@@ -22,6 +22,14 @@ curl ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/c
 1c 120s vs 42s 4c for hashing
 4c 149s vs 42s 8c for hashing
 
+# mkdir -p /tmp/ramdisk && sudo mount -t tmpfs -o size=8G tmpfs /tmp/ramdisk 
+for p in 3 2 1; do echo `date` $p; rm $f.db3.$p; ~/src/rapsi/fasta2hash.py -v -i $f -d $f.db3.$p --tmp /tmp/ramdisk --nprocs $p; done
+
+#Time elapsed: 0:08:58.361858 without ramdisk
+
+# c44 hashing 4:49 on 4c; 4:15 on 6c; 3:43 on 8c; 3:27 on 16c; 3:11 on 32c
+./fasta2hash.py -v -i $f -d $f.db3 --nprocs 4 #
+for p in 8 16 32; do echo `date` $p; ./fasta2hash.py -v -i $f -d $f.db3.n$p --nprocs $p; done
 
 
 # nr

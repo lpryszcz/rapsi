@@ -2,7 +2,7 @@
 desc="""Generate hash table and load it to db.
 
 Using reduced amino alphabet and recoding DNA bases as dinucleotides.
-In addition, sequences longer than 40K are divided into chunks.
+In addition, sequences longer than 50K are divided into chunks.
 
 Limits:
 - uint32 seq chunks
@@ -73,7 +73,7 @@ def reverse_complement(mer):
 def dnaseq2mers(seq, kmer, step, baseset=set(reduced_dna_alphabet.values())):
     """Kmers generator for DNA seq"""
     # di-nucleotides - shift by one to make sure both variants will be present
-    mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))#.union(seq[s:s+kmer] for s in xrange(1, len(seq)-kmer, step))
+    mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))
     for mer in mers:
         #store reverse complement
         if mer > reverse_complement(mer):
@@ -91,7 +91,6 @@ def get_seq_offset_length(handle, chunksize=50000):
     #http://biopython.org/DIST/docs/api/Bio.File-pysrc.html#_SQLiteManySeqFilesDict.__init__
     """
     name, pstart, length, seq = '', 0, 0, []
-    #for line in handle:
     while True: # buffering = 1 doesn't work, so need while
         line = handle.readline()
         if not line:
@@ -207,8 +206,7 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     for i in range(nproc):
         Process(target=worker2, args=(inQ, outQ, kmer, step, seq2mers, alphabetset)).start()        
     # hash sequences
-    i = 0
-    stops = 0
+    i = stops = 0
     for data in iter(outQ.get, 1):
         if not data:
             stops += 1
@@ -224,7 +222,7 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
             files[mer%len(files)].write("%s\t%s\n"%(mer, seqid))
     # set seqlimit only if >10k sequences
     seqlimit = int(round(kmerfrac * i / 100)) if i > 1e5 else i
-    info = " %s sequences / chunks [memory: %s MB]\n Setting seqlimit to: %s\n"
+    info = " %s sequences (chunks) [memory: %s MB]\n Setting seqlimit to: %s\n"
     sys.stderr.write(info%(i, memory_usage(), seqlimit))
     return files, seqlimit
 
