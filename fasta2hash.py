@@ -163,17 +163,81 @@ def db_seq_parser(cur, cmd, verbose):
         yield seqid, seq
     if verbose:
         sys.stderr.write(" %s letters in"%seqlen)
+
+def worker1(inQ, parser, nproc):
+    """Reading sequences from parser and feeding them to queue"""
+    for seqid, seq in parser:
+        inQ.put((seqid, seq))
+    for i in range(nproc):
+        inQ.put(None)
+        
+def worker2(inQ, outQ, kmer, step, seq2mers, alphabetset):
+    """Hashing sequences from the queue"""
+    for data in iter(inQ.get, 1):
+        if not data:
+            break
+        seqid, seq = data
+        # get mers from upper-case seq
+        outQ.put((seqid, list(seq2mers(seq.upper(), kmer, step, alphabetset))))
+    outQ.put(None)
     
 def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
-                   tmpfiles=1000, verbose=1):
+                   tmpfiles=1000, nproc=4, verbose=1): 
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
         alphabet = reduced_dna_alphabet.values()
         seq2mers = dnaseq2mers
-        merspace = len(alphabet)**kmer/2 #reverse complement
+        merspace = len(alphabet)**kmer/2 # reverse complement
     else:
-        alphabet = reduced_alphabet.values() #aminos
+        alphabet = reduced_alphabet.values() # aminos
+        seq2mers = aaseq2mers
+        merspace = len(alphabet)**kmer
+    alphabetset = set(alphabet)
+    if verbose:
+        info = "[%s] Preparing %s temporary files...\n"
+        sys.stderr.write(info%(datetime.ctime(datetime.now()), tmpfiles))
+    # open tempfiles
+    files = [tempfile.NamedTemporaryFile(dir=tmpdir, delete=0) for i in xrange(tmpfiles)]
+    # start workers 
+    inQ, outQ = Queue(100), Queue(100)
+    # 1 thread for seq reading
+    Process(target=worker1, args=(inQ, parser, nproc)).start()
+    # multiple threads for hashing
+    for i in range(nproc):
+        Process(target=worker2, args=(inQ, outQ, kmer, step, seq2mers, alphabetset)).start()        
+    # hash sequences
+    i = 0
+    stops = 0
+    for data in iter(outQ.get, 1):
+        if not data:
+            stops += 1
+            if stops==nproc:
+                break
+            continue
+        i += 1
+        if verbose and not i%1e3:
+            sys.stderr.write(" %s\r"%i)
+            #break
+        seqid, mers = data
+        for mer in mers:
+            files[mer%len(files)].write("%s\t%s\n"%(mer, seqid))
+    # set seqlimit only if >10k sequences
+    seqlimit = int(round(kmerfrac * i / 100)) if i > 1e5 else i
+    info = " %s sequences / chunks [memory: %s MB]\n Setting seqlimit to: %s\n"
+    sys.stderr.write(info%(i, memory_usage(), seqlimit))
+    return files, seqlimit
+
+def hash_sequences_single(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
+                          tmpfiles=1000, nproc=1, verbose=1):
+    """Parse input fasta and generate hash table."""
+    #get alphabet
+    if dna:
+        alphabet = reduced_dna_alphabet.values()
+        seq2mers = dnaseq2mers
+        merspace = len(alphabet)**kmer/2 # reverse complement
+    else:
+        alphabet = reduced_alphabet.values() # aminos
         seq2mers = aaseq2mers
         merspace = len(alphabet)**kmer
     alphabetset = set(alphabet)
@@ -361,11 +425,11 @@ def main():
     parser.add_argument("--dna",              default=False, action='store_true',
                         help="DNA alphabet    [amino acids]")
     parser.add_argument("--nprocs",           default=4, type=int, 
-                        help="no. of threads  [%(default)s]; NOTE: so far only tempfiles parsing is threaded!")
+                        help="no. of threads  [%(default)s]")
     parser.add_argument("--tmpdir",           default="/tmp",
                         help="temp directory  [%(default)s]")
     parser.add_argument("--tempfiles",        default=1000, type=int, 
-                        help="temp files no.  [%(default)s]")
+                        help="no. of tmp files  [%(default)s]")
     sqlopt = parser.add_argument_group('MySQL/SQLite options')
     sqlopt.add_argument("-d", "--db",         default="", 
                         help="database        [%(default)s]")
@@ -391,31 +455,31 @@ def main():
     if o.verbose:
         sys.stderr.write("Options: %s\n"%str(o))
 
-    #get sequence parser
+    # get sequence parser
     if o.input:
-        #prepare database
+        # prepare database
         cur = dbConnect_sqlite(o.db, o.table, o.kmer, o.verbose, o.replace)
-        #get parser
+        # get parser
         parser = fasta_parser(o.input, cur, o.verbose)
-        #hash seqs
+        # hash seqs
         files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
-                                         o.tmpdir, o.tempfiles, o.verbose)
-        #upload
+                                         o.tmpdir, o.tempfiles, o.nprocs, o.verbose)
+        # upload
         batch_insert(files, cur, o.table, seqlimit, o.nprocs, o.verbose)
     else:
-        #prompt for mysql passwd
+        # prompt for mysql passwd
         pswd = o.pswd
         if pswd==None:
             pswd = getpass.getpass("Enter MySQL password: ")
-        #connect
+        # connect
         cur = dbConnect(o.db, o.host, o.port, o.user, pswd, o.table, o.kmer, o.verbose, \
                         o.replace)
-        #get parser
+        # get parser
         parser = db_seq_parser(cur, o.cmd, o.verbose)
-        #hash seqs
+        # hash seqs
         files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
-                                         o.tmpdir, o.tempfiles, o.verbose)
-        #upload
+                                         o.tmpdir, o.tempfiles, o.nprocs, o.verbose)
+        # upload
         upload(files, o.db, o.host, o.port, o.user, pswd, o.table, seqlimit, o.dtype, \
                o.nprocs, o.notempfile, o.tmpdir, o.verbose)
     

@@ -11,9 +11,29 @@ samtools faidx $f 'ENA|CP002684|CP002684.1:10000-100080' | ./fasta2hits.py -v --
 
 # hg19
 f=test/hg19.fa
-./fasta2hash.py -v --dna -i $f -d $f.db3 # 7h
+./fasta2hash.py -v --dna -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp # 7h
 samtools faidx $f 'chr1:10000-200080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
 
+# swissprot
+f=test3/sprot.gz
+curl ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz | zcat | bgzip > $f
+./fasta2hash.py -v -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp # 12min 0:12:26 vs 0:06:06 on 4c vs  on 8c
+
+1c 120s vs 42s 4c for hashing
+4c 149s vs 42s 8c for hashing
+
+
+
+# nr
+f=test3/nr.gz
+curl ftp://ftp.ncbi.nlm.nih.gov/blast/db/FASTA/nr.gz | zcat | bgzip > $f
+./fasta2hash.py -v -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp # 
+
+
+# nt
+f=test3/nt.gz
+curl ftp://ftp.ncbi.nlm.nih.gov/blast/db/FASTA/nt.gz | zcat | bgzip > $f
+./fasta2hash.py -v --dna -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp # 
 
 
 ## v1.4
