@@ -28,9 +28,9 @@ DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
 
 # http://www.rpgroup.caltech.edu/publications/supplements/alphabets/HP/Welcome.html
 ## MFILV, ACW, YQHPGTSN, RK, DE
-mj5 = {'A': 1, 'C': 1, 'E': 4, 'D': 4, 'G': 2, 'F': 0, 'I': 0, 'H': 2, 'K': 3, 'M': 0, 'L': 0, 'N': 2, 'Q': 2, 'P': 2, 'S': 2, 'R': 3, 'T': 2, 'W': 1, 'V': 0, 'Y': 2}
+mj5 = {'A': '1', 'C': '1', 'E': '4', 'D': '4', 'G': '2', 'F': '0', 'I': '0', 'H': '2', 'K': '3', 'M': '0', 'L': '0', 'N': '2', 'Q': '2', 'P': '2', 'S': '2', 'R': '3', 'T': '2', 'W': '1', 'V': '0', 'Y': '2'}
 ## MFILV, A, C, WYQHPGTSN, RK, DE
-mj6 = {'A': 1, 'C': 2, 'E': 5, 'D': 5, 'G': 3, 'F': 0, 'I': 0, 'H': 3, 'K': 4, 'M': 0, 'L': 0, 'N': 3, 'Q': 3, 'P': 3, 'S': 3, 'R': 4, 'T': 3, 'W': 3, 'V': 0, 'Y': 3}
+mj6 = {'A': '1', 'C': '2', 'E': '5', 'D': '5', 'G': '3', 'F': '0', 'I': '0', 'H': '3', 'K': '4', 'M': '0', 'L': '0', 'N': '3', 'Q': '3', 'P': '3', 'S': '3', 'R': '4', 'T': '3', 'W': '3', 'V': '0', 'Y': '3'}
 reduced_alphabet = mj6
 
 # recode di-nucleotides as base16 (0-F) characters
@@ -55,6 +55,14 @@ def decode(base, alphabet, n=0):
     return n  
     
 def aaseq2mers(seq, kmer, step, aminoset=set(reduced_alphabet.values())):
+    """Kmers generator for amino seq"""
+    # reduce sequence
+    seq = "".join(reduced_alphabet[aa] if aa in reduced_alphabet else aa for aa in seq)
+    mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))
+    # return int representation of mer starting from 1
+    return [int(mer, base=len(aminoset))+1 for mer in filter(lambda x: x.isdigit(), mers)]
+
+def aaseq2mers0(seq, kmer, step, aminoset=set(reduced_alphabet.values())):
     """Kmers generator for amino seq"""
     mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))
     for mer in mers:
@@ -177,11 +185,11 @@ def worker2(inQ, outQ, kmer, step, seq2mers, alphabetset):
             break
         seqid, seq = data
         # get mers from upper-case seq
-        outQ.put((seqid, list(seq2mers(seq.upper(), kmer, step, alphabetset))))
+        outQ.put((seqid, seq2mers(seq.upper(), kmer, step, alphabetset)))
     outQ.put(None)
     
-def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
-                   tmpfiles=1000, nproc=4, verbose=1): 
+def hash_sequences_multi(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
+                         tmpfiles=1000, nproc=4, verbose=1): 
     """Parse input fasta and generate hash table."""
     #get alphabet
     if dna:
@@ -199,7 +207,7 @@ def hash_sequences(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     # open tempfiles
     files = [tempfile.NamedTemporaryFile(dir=tmpdir, delete=0) for i in xrange(tmpfiles)]
     # start workers 
-    inQ, outQ = Queue(100), Queue(100)
+    inQ, outQ = Queue(1000), Queue(1000)
     # 1 thread for seq reading
     Process(target=worker1, args=(inQ, parser, nproc)).start()
     # multiple threads for hashing
@@ -453,6 +461,10 @@ def main():
     if o.verbose:
         sys.stderr.write("Options: %s\n"%str(o))
 
+    hash_sequences = hash_sequences_multi
+    if o.nprocs<2:
+        hash_sequences = hash_sequences_single
+        
     # get sequence parser
     if o.input:
         # prepare database
@@ -460,10 +472,15 @@ def main():
         # get parser
         parser = fasta_parser(o.input, cur, o.verbose)
         # hash seqs
+        t0 = datetime.now()
         files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
                                          o.tmpdir, o.tempfiles, o.nprocs, o.verbose)
+        t1 = datetime.now()
+        print t1-t0#; return
         # upload
         batch_insert(files, cur, o.table, seqlimit, o.nprocs, o.verbose)
+        t2 = datetime.now()
+        print t2-t1
     else:
         # prompt for mysql passwd
         pswd = o.pswd
