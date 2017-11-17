@@ -6,30 +6,31 @@ samtools faidx $f 'Chromosome:50040-100080' | ./fasta2hits.py -v --dna -d $f.db3
 
 # A. thaliana
 f=test/Ath.fa
-./fasta2hash.py -v --dna -i $f -d $f.db3 # 9min
+./fasta2hash.py -v --dna -i $f -d $f.db3 # 9min vs 0:02:33 when optimised!
 samtools faidx $f 'ENA|CP002684|CP002684.1:10000-100080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
 
 # hg19
 f=test/hg19.fa
-./fasta2hash.py -v --dna -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp # 7h
+./fasta2hash.py -v --dna -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp # 7h vs 1:13:18 after optimisation
 samtools faidx $f 'chr1:10000-200080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
 
 # swissprot
 f=test3/sprot.gz
 curl ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz | zcat | bgzip > $f
-./fasta2hash.py -v -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp # 12min 0:12:26 vs 0:06:06 on 4c vs  on 8c
+./fasta2hash.py -v -i $f -d $f.db3 # 12min 0:12:26 vs 0:05:04 after optimisation
+./fasta2hits.py --random 1 -d $f.db3 | ./fasta2hits.py -v -d $f.db3
 
-1c 120s vs 42s 4c for hashing
-4c 149s vs 42s 8c for hashing
+# testing
+for d in 00 05 10 15 20; do 
+echo `date` $d; if [ ! -s $f.d$d.fa ]; then ~/src/rapsi/fasta2hits.py --random 1000 -d $f.db3 | filter_fasta.py -l100 -w1000000 | grep -v '^$' | head -n 400 | fasta2diverged.py -d 0.$d > $f.d$d.fa; fi; ~/src/rapsi/fasta2hits.py -d $f.db3 -i $f.d$d.fa | gzip > $f.d$d.fa.rapsi.gz; zcat $f.d$d.fa.rapsi.gz | awk '$1==$2' | cut -f1 | uniq | wc -l; 
+done
 
 # mkdir -p /tmp/ramdisk && sudo mount -t tmpfs -o size=8G tmpfs /tmp/ramdisk 
-for p in 3 2 1; do echo `date` $p; rm $f.db3.$p; ~/src/rapsi/fasta2hash.py -v -i $f -d $f.db3.$p --tmp /tmp/ramdisk --nprocs $p; done
 
-#Time elapsed: 0:08:58.361858 without ramdisk
-
-# c44 hashing 4:49 on 4c; 4:15 on 6c; 3:43 on 8c; 3:27 on 16c; 3:11 on 32c
-./fasta2hash.py -v -i $f -d $f.db3 --nprocs 4 #
-for p in 8 16 32; do echo `date` $p; ./fasta2hash.py -v -i $f -d $f.db3.n$p --nprocs $p; done
+## 
+# pfam
+f=test3/pfam.gz
+curl ftp://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/pfamseq.gz | zcat | bgzip > $f
 
 
 # nr

@@ -4,6 +4,8 @@ desc="""Generate hash table and load it to db.
 Using reduced amino alphabet and recoding DNA bases as dinucleotides.
 In addition, sequences longer than 50K are divided into chunks.
 
+Note, lots of free space in --tmp is needed (up to 8x more than uncompressed DB in FastA)!
+
 Limits:
 - uint32 seq chunks
 """
@@ -21,21 +23,27 @@ from datetime import datetime
 from Bio import SeqIO, bgzf
 from multiprocessing import Pool, Process, Queue
 
-aminos = 'ACDEFGHIKLMNPQRSTVWY'
+aminos = 'ACDEFGHIKLMNPQRSTVWY' #alphanumeric="".join(chr(i) for i in range(48,58)+range(65,91))
 aminoset = set(aminos)
-nucleotides = 'ACGT'
+nucleotides = 'AGCT' # order is important as complement bases (A-T and G-C) will be exchanged later
 DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
 
 # http://www.rpgroup.caltech.edu/publications/supplements/alphabets/HP/Welcome.html
 ## MFILV, ACW, YQHPGTSN, RK, DE
-mj5 = {'A': '1', 'C': '1', 'E': '4', 'D': '4', 'G': '2', 'F': '0', 'I': '0', 'H': '2', 'K': '3', 'M': '0', 'L': '0', 'N': '2', 'Q': '2', 'P': '2', 'S': '2', 'R': '3', 'T': '2', 'W': '1', 'V': '0', 'Y': '2'}
+mj5 = {'A': '1', 'C': '1', 'E': '4', 'D': '4', 'G': '2', 'F': '0', 'I': '0', 'H': '2', 'K': '3', 'M': '0',
+       'L': '0', 'N': '2', 'Q': '2', 'P': '2', 'S': '2', 'R': '3', 'T': '2', 'W': '1', 'V': '0', 'Y': '2'}
 ## MFILV, A, C, WYQHPGTSN, RK, DE
-mj6 = {'A': '1', 'C': '2', 'E': '5', 'D': '5', 'G': '3', 'F': '0', 'I': '0', 'H': '3', 'K': '4', 'M': '0', 'L': '0', 'N': '3', 'Q': '3', 'P': '3', 'S': '3', 'R': '4', 'T': '3', 'W': '3', 'V': '0', 'Y': '3'}
-reduced_alphabet = mj6
+mj6 = {'A': '1', 'C': '2', 'E': '5', 'D': '5', 'G': '3', 'F': '0', 'I': '0', 'H': '3', 'K': '4', 'M': '0',
+       'L': '0', 'N': '3', 'Q': '3', 'P': '3', 'S': '3', 'R': '4', 'T': '3', 'W': '3', 'V': '0', 'Y': '3'}
+aa2digit = {'A': '0', 'C': '1', 'E': '3', 'D': '2', 'G': '5', 'F': '4', 'I': '7', 'H': '6', 'K': '8', 'M': 'A',
+            'L': '9', 'N': 'B', 'Q': 'D', 'P': 'C', 'S': 'F', 'R': 'E', 'T': 'G', 'W': 'I', 'V': 'H', 'Y': 'J'}
+reduced_alphabet = mj6 #aa2digit #
 
-# recode di-nucleotides as base16 (0-F) characters
-di4 = {'AA': '0', 'AC': '1', 'GT': 'B', 'AG': '2', 'CC': '5', 'CA': '4', 'CG': '6', 'TT': 'F', 'GG': 'A', 'GC': '9', 'AT': '3', 'GA': '8', 'TG': 'E', 'TA': 'C', 'TC': 'D', 'CT': '7'}
-reduced_dna_alphabet = di4
+# recode di-nucleotides as base16 (0-F) characters (hexadecimal system)
+di2hex = {'AA': '0', 'AC': '2', 'GT': '7', 'AG': '1', 'CC': 'A', 'CA': '8', 'CG': '9', 'TT': 'F',
+          'GG': '5', 'GC': '6', 'AT': '3', 'GA': '4', 'TG': 'D', 'TA': 'C', 'TC': 'E', 'CT': 'B'}
+HEXcomplement = {'A': '5', 'C': '3', 'B': '4', 'E': '1', 'D': '2', 'F': '0', '1': 'E', '0': 'F',
+                 '3': 'C', '2': 'D', '5': 'A', '4': 'B', '7': '8', '6': '9', '9': '6', '8': '7'}
 
 def memory_usage():
     """Return memory usage in MB"""
@@ -54,50 +62,40 @@ def decode(base, alphabet, n=0):
         n += alphabet.index(char) * (len(alphabet) ** (len(base) - i))
     return n  
     
-def aaseq2mers(seq, kmer, step, aminoset=set(reduced_alphabet.values())):
+def aaseq2mers(seq, kmer, step, aminoset=set(reduced_alphabet.values())): #reduced_alphabet
     """Kmers generator for amino seq"""
     # reduce sequence
-    seq = "".join(reduced_alphabet[aa] if aa in reduced_alphabet else aa for aa in seq)
+    seq = "".join(reduced_alphabet[aa] if aa in reduced_alphabet else "-" for aa in seq)
     mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))
     # return int representation of mer starting from 1
-    return [int(mer, base=len(aminoset))+1 for mer in filter(lambda x: x.isdigit(), mers)]
+    return [int(mer, base=len(aminoset))+1 for mer in filter(lambda x: "-" not in x, mers)]
 
-def aaseq2mers0(seq, kmer, step, aminoset=set(reduced_alphabet.values())):
-    """Kmers generator for amino seq"""
-    mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))
-    for mer in mers:
-        # get mer as int with given base 
-        imer = "".join(map(str, (reduced_alphabet[aa] for aa in mer if aa in reduced_alphabet)))
-        # catch wrong kmers
-        if len(imer)!=len(mer):
-            continue
-        # avoid 0
-        yield int(imer, base=len(aminoset))+1
-
-def reverse_complement(mer):
+def reverse_complement(mer, DNAcomplement=DNAcomplement):
     """Return DNA reverse complement"""
-    return "".join(DNAcomplement[b] for b in reversed(mer) if b in DNAcomplement)
+    return reversed(complement(mer, DNAcomplement))
     
-def dnaseq2mers(seq, kmer, step, baseset=set(reduced_dna_alphabet.values())):
+def complement(mer, complementDict=HEXcomplement):
+    """Return DNA reverse complement"""
+    return "".join(complementDict[b] for b in mer if b in complementDict)
+    
+def dnaseq2mers(seq, kmer, step, baseset=set(di2hex.values())):
     """Kmers generator for DNA seq"""
-    # di-nucleotides - shift by one to make sure both variants will be present
-    mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))
-    for mer in mers:
-        #store reverse complement
-        if mer > reverse_complement(mer):
-            mer = reverse_complement(mer)
-        # get mer as int with given base (dinucleotide)
-        imer = "".join(map(str, (reduced_dna_alphabet[mer[i:i+2]] for i in range(0, kmer, 2) if mer[i:i+2] in reduced_dna_alphabet)))
-        # catch wrong kmers
-        if len(imer)*2!=kmer:
-            continue
-        # avoid 0
-        yield int(imer, base=len(baseset))+1
+    # reduce sequence & kmer since using dinucleotides
+    kmer /= 2
+    merspace = len(di2hex)**kmer/2
+    # as adding dinucleotides, need to shift sequence by 1 as well
+    diseq = [] 
+    for j in (0, 1):
+        diseq.append("".join(di2hex[seq[i:i+2]] if seq[i:i+2] in di2hex else "-" for i in xrange(j, len(seq)-2, 2)))
+    # dinucleotides - shift by one to make sure both variants will be present
+    mers = set(seq[s:s+kmer] for seq in diseq for s in xrange(0, len(seq)-kmer, step))
+    # return int representation of mer starting from 1, return complement if mer>=merspace
+    return [int(mer, base=len(baseset))+1 if int(mer, base=len(baseset))<merspace
+            else int(complement(mer), base=len(baseset))+1
+            for mer in filter(lambda x: "-" not in x, mers)]
 
 def get_seq_offset_length(handle, chunksize=50000):
-    """Return name, sequence, entry start offset and length. BGZIP compatible. 
-    #http://biopython.org/DIST/docs/api/Bio.File-pysrc.html#_SQLiteManySeqFilesDict.__init__
-    """
+    """Return name, sequence, entry start offset and length. BGZIP compatible.  """
     name, pstart, length, seq = '', 0, 0, []
     while True: # buffering = 1 doesn't work, so need while
         line = handle.readline()
@@ -120,42 +118,41 @@ def get_seq_offset_length(handle, chunksize=50000):
                 pstart += len(_seq)
                 seq, length = [], 0
                 soffset = handle.tell()
-                
+    # yield last bit
     if seq:
         _seq = "".join(seq)
         yield "%s:%s-%s"%(name, pstart, pstart+len(_seq)), _seq, soffset, length
     
 def fasta_parser(fastas, cur, verbose):
-    """Fasta iterator returning seqid as base64 and sequence str.
-    Index sequence using proprietrary parser.
-    Handle bgzip compressed files.
+    """Fasta iterator returning seqid (int) and sequence str.
+    Index sequence using proprietary parser. Can handle bgzip compressed files.
     """
     if verbose:
         sys.stderr.write("[%s] Hashing and indexing sequences...\n"%datetime.ctime(datetime.now()))
-    #parse fasta
-    i = 0
-    seqlen = 0
+    # parse fasta files
+    i = seqlen = 0
     cmd = "INSERT INTO offset_data VALUES (?, ?, ?, ?, ?)"
     for fi, fn in enumerate(fastas):
-        #add file to db
+        # add file to db
         cur.execute("INSERT INTO file_data VALUES (?, ?)", (fi, fn))
-        #get handle and start byte
+        # get file handle 
         if fn.endswith('.gz'):
             handle = bgzf.open(fn) 
         else:
             handle = open(fn)
-        #parse entries
+        # parse entries in chunks
         for i, (name, seq, offset, elen) in enumerate(get_seq_offset_length(handle), i+1):
-            #if i>10**6: break
             seqlen += len(seq)
+            if verbose and not i%1e3:
+                sys.stderr.write(" %.2fM letters in %s sequences (chunks)\r"%(seqlen/1e6, i))
+            # store offset info
             cur.execute(cmd, (i, fi, name, offset, elen))
             yield i, seq
     if verbose:
-        sys.stderr.write(" %s letters in"%seqlen)
-    #fill metadata
+        sys.stderr.write(" %.2fM letters in %s sequences (chunks)\n"%(seqlen/1e6, i))
+    # fill metadata & and commit changes
     cur.executemany("INSERT INTO meta_data VALUES (?, ?)", \
                     (('count', i), ('format', 'fasta'), ('dblength', seqlen)))
-    #and commit changes
     cur.connection.commit()
 
 def db_seq_parser(cur, cmd, verbose):
@@ -163,13 +160,13 @@ def db_seq_parser(cur, cmd, verbose):
     l = cur.execute(cmd) 
     if verbose:
         sys.stderr.write("[%s] Hashing sequences...\n"%datetime.ctime(datetime.now()))
+    # parse seqs
     seqlen = 0
-    #parse seqs
     for seqid, seq in cur:
         seqlen += len(seq)
         yield seqid, seq
     if verbose:
-        sys.stderr.write(" %s letters in"%seqlen)
+        sys.stderr.write(" %s letters parsed\n"%seqlen)
 
 def worker1(inQ, parser, nproc):
     """Reading sequences from parser and feeding them to queue"""
@@ -178,32 +175,27 @@ def worker1(inQ, parser, nproc):
     for i in range(nproc):
         inQ.put(None)
         
-def worker2(inQ, outQ, kmer, step, seq2mers, alphabetset):
+def worker2(inQ, outQ, kmer, step, seq2mers):
     """Hashing sequences from the queue"""
     for data in iter(inQ.get, 1):
         if not data:
             break
         seqid, seq = data
         # get mers from upper-case seq
-        outQ.put((seqid, seq2mers(seq.upper(), kmer, step, alphabetset)))
+        outQ.put((seqid, seq2mers(seq.upper(), kmer, step)))
     outQ.put(None)
     
 def hash_sequences_multi(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
                          tmpfiles=1000, nproc=4, verbose=1): 
     """Parse input fasta and generate hash table."""
-    #get alphabet
-    if dna:
-        alphabet = reduced_dna_alphabet.values()
-        seq2mers = dnaseq2mers
-        merspace = len(alphabet)**kmer/2 # reverse complement
-    else:
-        alphabet = reduced_alphabet.values() # aminos
-        seq2mers = aaseq2mers
-        merspace = len(alphabet)**kmer
-    alphabetset = set(alphabet)
     if verbose:
         info = "[%s] Preparing %s temporary files...\n"
         sys.stderr.write(info%(datetime.ctime(datetime.now()), tmpfiles))
+    # set seq2mers & alphabet
+    if dna:
+        seq2mers = dnaseq2mers
+    else:
+        seq2mers = aaseq2mers
     # open tempfiles
     files = [tempfile.NamedTemporaryFile(dir=tmpdir, delete=0) for i in xrange(tmpfiles)]
     # start workers 
@@ -212,7 +204,7 @@ def hash_sequences_multi(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     Process(target=worker1, args=(inQ, parser, nproc)).start()
     # multiple threads for hashing
     for i in range(nproc):
-        Process(target=worker2, args=(inQ, outQ, kmer, step, seq2mers, alphabetset)).start()        
+        Process(target=worker2, args=(inQ, outQ, kmer, step, seq2mers)).start()        
     # hash sequences
     i = stops = 0
     for data in iter(outQ.get, 1):
@@ -222,44 +214,32 @@ def hash_sequences_multi(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
                 break
             continue
         i += 1
-        if verbose and not i%1e3:
-            sys.stderr.write(" %s\r"%i)
-            #break
         seqid, mers = data
         for mer in mers:
             files[mer%len(files)].write("%s\t%s\n"%(mer, seqid))
     # set seqlimit only if >10k sequences
     seqlimit = int(round(kmerfrac * i / 100)) if i > 1e5 else i
-    info = " %s sequences (chunks) [memory: %s MB]\n Setting seqlimit to: %s\n"
-    sys.stderr.write(info%(i, memory_usage(), seqlimit))
+    info = "Setting seqlimit to: %s [memory: %s MB]\n"
+    sys.stderr.write(info%(memory_usage(), seqlimit))
     return files, seqlimit
 
 def hash_sequences_single(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
                           tmpfiles=1000, nproc=1, verbose=1):
     """Parse input fasta and generate hash table."""
-    #get alphabet
-    if dna:
-        alphabet = reduced_dna_alphabet.values()
-        seq2mers = dnaseq2mers
-        merspace = len(alphabet)**kmer/2 # reverse complement
-    else:
-        alphabet = reduced_alphabet.values() # aminos
-        seq2mers = aaseq2mers
-        merspace = len(alphabet)**kmer
-    alphabetset = set(alphabet)
     if verbose:
         info = "[%s] Preparing %s temporary files...\n"
         sys.stderr.write(info%(datetime.ctime(datetime.now()), tmpfiles))
+    # get alphabet
+    if dna:
+        seq2mers = dnaseq2mers
+    else:
+        seq2mers = aaseq2mers
     # open tempfiles
     files = [tempfile.NamedTemporaryFile(dir=tmpdir, delete=0) for i in xrange(tmpfiles)]
-    #hash sequences
+    # hash sequences & get mers from upper-case seq
     i = 0
     for i, (seqid, seq) in enumerate(parser, 1):
-        if verbose and not i%1e3:
-            sys.stderr.write(" %s\r"%i)
-            #break
-        # get mers from upper-case seq
-        for mer in seq2mers(seq.upper(), kmer, step, alphabetset):
+        for mer in seq2mers(seq.upper(), kmer, step):
             files[mer%len(files)].write("%s\t%s\n"%(mer, seqid))
     # set seqlimit only if >10k sequences
     seqlimit = int(round(kmerfrac * i / 100)) if i > 1e5 else i
@@ -430,7 +410,7 @@ def main():
                         help="ignore kmers present in more than [%(default)s] percent targets")
     parser.add_argument("--dna",              default=False, action='store_true',
                         help="DNA alphabet    [amino acids]")
-    parser.add_argument("--nprocs",           default=4, type=int, 
+    parser.add_argument("--nprocs",           default=3, type=int, 
                         help="no. of threads  [%(default)s]")
     parser.add_argument("--tmpdir",           default="/tmp",
                         help="temp directory  [%(default)s]")

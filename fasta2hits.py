@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 desc="""Scan hash table and report matches. For searches for relatively similar
 sequences, sequence sampling is recommended.
+
+TBD:
+- estimate seqlimit for DNA from mer occurencies hist?
 """
 epilog="""Author:
 l.p.pryszcz@gmail.com
@@ -18,12 +21,9 @@ from fasta2hash import dnaseq2mers, aaseq2mers
 
 def coordinate2chr_start_end(name):
     """Unload coordinate info ie. for chr1:1000-2000 return chr1, 1000, 2000"""
-    if "-" in name and ":" in name and len(name.split(":"))==2:
-        chrname, se = name.split(":") #and name.split(":")[-1].split("-")[0].isdigit():
-        if len(se.split('-'))==2 and se.split('-')[0].isdigit() and se.split('-')[1].isdigit():
-            s, e = map(int, se.split('-'))
-            return chrname, s, e
-    return name, 0, 0
+    parts = name.split(":")
+    chrname, (s, e) = ":".join(parts[:-1]), map(int, parts[-1].split('-'))
+    return chrname, s, e
 
 def chunks2consecutive(chunks):
     """Yield consecutive chunks"""
@@ -47,7 +47,7 @@ def chunks2consecutive(chunks):
             _chunk.append(data)
         yield n, _chunk
         
-def chunks2combined(orgchunks, files):
+def chunks2combined(orgchunks, files, trim_name=False):
     """Combine neighbouring FastA chunks"""
     # combine seq of consecutive chunks
     for n, chunks in chunks2consecutive(orgchunks):
@@ -59,9 +59,13 @@ def chunks2combined(orgchunks, files):
             except:
                 # bgzip sometimes doesn't work at first seek
                 sys.stderr.write("[Warning] Cannot fetch sequence %s:%s-%s from %s at %s + %s bytes\n"%(n, s, e, fname, offset, length))
-        yield ">%s:%s-%s\n%s"%(n, chunks[0][0], chunks[-1][1], "".join(seqs))
+        if trim_name:
+            name = n
+        else:
+            name = "%s:%s-%s"%(n, chunks[0][0], chunks[-1][1])
+        yield ">%s\n%s"%(name, "".join(seqs))
 
-def sqlite2seq(cur, db, protids):
+def sqlite2seq(cur, db, protids, trim_name=False):
     """Return target fastas for protids from sqlite3."""
     # open target files
     cur.execute("SELECT name FROM file_data")
@@ -82,7 +86,7 @@ def sqlite2seq(cur, db, protids):
     cmd = """SELECT f.name, seqname, offset, length FROM offset_data o JOIN file_data f
     ON o.file_number=f.file_number WHERE key IN (%s)""" % ",".join(str(p) for p in protids)
     cur.execute(cmd)
-    return "".join(fasta for fasta in chunks2combined(cur.fetchall(), files))
+    return "".join(fasta for fasta in chunks2combined(cur.fetchall(), files, trim_name))
 
 def mysql2seq(cur, protids, seqcmd):
     """Return target fasta for protids from mysql."""
@@ -94,13 +98,13 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
                 seq2mers, dtype, verbose):
     """Return matching protids and sequences"""
     if verbose:
-        info = "Parsing %s letters from %s sequence(s)...\n"
+        info = "Parsing %s letters from %s sequence(s)..."
         sys.stderr.write(info % (len("".join(qseqs)), len(qseqs)))
     kmers = [] #set()
     for qseq in qseqs:
-        kmers.append(list(seq2mers(qseq, kmer, step)))
+        kmers.append(seq2mers(qseq.upper(), kmer, step))
     if verbose:
-        sys.stderr.write("  %s mers\n"%sum(len(x) for x in kmers))
+        sys.stderr.write(" %s mers...\n"%sum(len(x) for x in kmers))
     fprotids = []
     for fsampling in samplings:
         mers = []
@@ -110,8 +114,8 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
             mers += qmers[:sampling]
         mers = set(mers)
         if verbose:
-            sys.stderr.write("  Sampled %s mers: %s...\n"% (len(mers),", ".join(map(str, list(mers)[:6]))))
-        #get protids for set of mers
+            sys.stderr.write(" Sampled %s mers: %s...\n"% (len(mers),", ".join(map(str, list(mers)[:6]))))
+        # get protids for set of mers
         cmd = "select protids from `%s` where hash in (%s)" % (table, ",".join(map(str, mers)))
         cur.execute(cmd)
         protids = {}
@@ -136,16 +140,16 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
             n = len(counts)-i
             fprotids = filter(lambda x: protids[x]>n, protids)
             if verbose:
-                sys.stderr.write("   %8i entries having %s+ kmer matches.\n"% (len(fprotids), n))
+                sys.stderr.write("  %8i entries having %s+ kmer matches.\n"% (len(fprotids), n))
         if fprotids:
             break
-    #return None if no kmer matches
+    # return None if no kmer matches
     if not fprotids:
         return 
-    #get sequences
+    # get sequences
     if verbose:
         sys.stderr.write(" Fetching %s sequences...\n" % len(fprotids))
-    #select protids as text or str
+    # select protids as text or str
     if not os.path.isfile(db): #seqcmd:
         targets = mysql2seq(cur, fprotids, seqcmd)
     else:
@@ -171,7 +175,7 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
     tmptf = open(tmpt, "w"); tmptf.write(matches); tmptf.close()
     #run blat
     tmpr = "%s.out" % tmpfn
-    if dna:
+    if dna: #
         cmd  = "%s -q=dna -t=dna -noHead -extendThroughN -mask=lower %s %s %s" % (blatpath, tmpt, tmpq, tmpr)
         #cmd = "lastdb %s %s; lastal -l 100 %s %s | maf-convert psl - %s > %s" % (tmpt, tmpt, tmpt, tmpt, tmpq, tmpr)
     else:
@@ -235,7 +239,6 @@ def hits2algs(qids, qseqs, matches, blatpath, tmpdir, link, dblength, dna, verbo
         yield sorted(algs, key=lambda x: x[4], reverse=True)
     #clean-up
     if "Error:" not in blatout and "No such file" not in blatout:
-        return
         os.unlink(tmpq)
         os.unlink(tmpt)
         os.unlink(tmpr)
@@ -331,7 +334,7 @@ def get_random_sequence(cur, db, n, nprotids, seqcmd, verbose):
     #get random ids
     if os.path.isfile(db):
         protids = random.sample(xrange(1, nprotids+1), n)
-        seqs = sqlite2seq(cur, db, protids)
+        seqs = sqlite2seq(cur, db, protids, trim_name=True)
     else:
         #get no. of proteins in MySQL
         seqcmd = seqcmd.split(' where ')[0]
@@ -381,8 +384,8 @@ def main():
                         help="add html link matches [%(default)s]")
     parser.add_argument("-l", "--limit",     default=0, type=int,
                         help="stop after      [all]")
-    parser.add_argument("--random",          default=0, type=int,
-                        help="return N random sequence(s) and exit [%(default)s]")
+    parser.add_argument("-R", "--random",    default=0, type=int,
+                        help="return R random sequence(s) and exit [%(default)s]")
     similo = parser.add_argument_group('Similarity search options')
     similo.add_argument("-k", "--kmer",      default=10, type=int, 
                         help="hash length     [%(default)s]")
@@ -394,7 +397,7 @@ def main():
                         help="hash steps      [%(default)s]")
     similo.add_argument("--seqlimit",         default=100, type=int, 
                         help="max. seqs to retrieve [%(default)s]")
-    similo.add_argument("-n", "--sampling",   nargs="*", default=[0.05], type=float,
+    similo.add_argument("-n", "--sampling",   nargs="*", default=[1.0], type=float,
                         help="sample fraction of kmers per query %(default)s")
     similo.add_argument("--ifrac",            default=0.3, type=float, 
                         help="min. identity of best hit [%(default)s]")
