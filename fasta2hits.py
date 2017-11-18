@@ -94,7 +94,7 @@ def mysql2seq(cur, protids, seqcmd):
     cur.execute(seqcmd%protidstext)
     return "".join(">%s\n%s\n"%tup for tup in cur.fetchall())
     
-def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, samplings, \
+def seq2matches(cur, db, table, seqcmd, qid, qseqs, step, seqlimit, samplings, \
                 seq2mers, dtype, verbose):
     """Return matching protids and sequences"""
     if verbose:
@@ -102,7 +102,7 @@ def seq2matches(cur, db, table, seqcmd, qid, qseqs, kmer, step, seqlimit, sampli
         sys.stderr.write(info % (len("".join(qseqs)), len(qseqs)))
     kmers = [] #set()
     for qseq in qseqs:
-        kmers.append(seq2mers(qseq.upper(), kmer, step))
+        kmers.append(seq2mers(qseq.upper(), step))
     if verbose:
         sys.stderr.write(" %s mers...\n"%sum(len(x) for x in kmers))
     fprotids = []
@@ -282,7 +282,7 @@ def algs2formatted_output(algs, ifrac, ofrac, html, verbose, no_query):
     else:
         return blastTable.asTXT()
 
-def fasta2hits(cur, db, table, seqcmd, qids, qseqs, blatpath, tmpdir, kmer, step, \
+def fasta2hits(cur, db, table, seqcmd, qids, qseqs, blatpath, tmpdir, step, \
                seqlimit, html, link, sampling, dblength, verbose, dna=False, \
                ifrac=0.3, ofrac=0.3, dtype="uint32", no_query=True):
     """Report hits to qseq from hash table and sequences.
@@ -298,7 +298,7 @@ def fasta2hits(cur, db, table, seqcmd, qids, qseqs, blatpath, tmpdir, kmer, step
     else:
         seq2mers = aaseq2mers
     #get kmer matching sequences
-    matches = seq2matches(cur, db, table, seqcmd, qids, qseqs, kmer, step, seqlimit, \
+    matches = seq2matches(cur, db, table, seqcmd, qids, qseqs, step, seqlimit, \
                           sampling, seq2mers, dtype, verbose)
 
     if not matches:
@@ -387,13 +387,13 @@ def main():
     parser.add_argument("-R", "--random",    default=0, type=int,
                         help="return R random sequence(s) and exit [%(default)s]")
     similo = parser.add_argument_group('Similarity search options')
-    similo.add_argument("-k", "--kmer",      default=10, type=int, 
-                        help="hash length     [%(default)s]")
+    #similo.add_argument("-k", "--kmer",      default=5, type=int, 
+    #                    help="hash length     [%(default)s]")
     similo.add_argument("--blatpath",        default='blat', 
                         help="BLAT path       [%(default)s]")
     similo.add_argument("--tmpdir",          default='.', 
                         help="TEMP path       [%(default)s]")
-    similo.add_argument("-s", "--step",       default=10, type=int, 
+    similo.add_argument("-s", "--step",       default=5, type=int, 
                         help="hash steps      [%(default)s]")
     similo.add_argument("--seqlimit",         default=100, type=int, 
                         help="max. seqs to retrieve [%(default)s]")
@@ -495,14 +495,14 @@ def main():
         #batch query
         if not i%o.batch:
             out = fasta2hits(cur, o.db, o.table, o.seqcmd, qids, seqs, o.blatpath, \
-                             o.tmpdir, o.kmer, o.step, o.seqlimit, o.html, o.link, \
+                             o.tmpdir, o.step, o.seqlimit, o.html, o.link, \
                              o.sampling, o.dblength, o.verbose, o.dna, \
                              o.ifrac, o.ofrac, o.dtype, o.no_query)
             o.output.write(out)
             seqs, qids = [], []
     if seqs:
         out = fasta2hits(cur, o.db, o.table, o.seqcmd, qids, seqs, o.blatpath, \
-                         o.tmpdir, o.kmer, o.step, o.seqlimit, o.html, o.link, \
+                         o.tmpdir, o.step, o.seqlimit, o.html, o.link, \
                          o.sampling, o.dblength, o.verbose, o.dna, \
                          o.ifrac, o.ofrac, o.dtype, o.no_query)
         o.output.write(out)

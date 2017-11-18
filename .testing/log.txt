@@ -25,6 +25,10 @@ for d in 00 05 10 15 20; do
 echo `date` $d; if [ ! -s $f.d$d.fa ]; then ~/src/rapsi/fasta2hits.py --random 1000 -d $f.db3 | filter_fasta.py -l100 -w1000000 | grep -v '^$' | head -n 400 | fasta2diverged.py -d 0.$d > $f.d$d.fa; fi; ~/src/rapsi/fasta2hits.py -d $f.db3 -i $f.d$d.fa | gzip > $f.d$d.fa.rapsi.gz; zcat $f.d$d.fa.rapsi.gz | awk '$1==$2' | cut -f1 | uniq | wc -l; 
 done
 
+for d in 00 05 10 15 20; do 
+echo `date` $d; if [ ! -s $f.d$d.fa ]; then ~/src/rapsi/fasta2hits.py --random 1000 -d $f.db3 | filter_fasta.py -l100 -w1000000 | grep -v '^$' | head -n 400 | fasta2diverged.py -d 0.$d > $f.d$d.fa; fi; ~/src/rapsi/fasta2hits.py -d $f.db3.k5 -i $f.d$d.fa -k5 | gzip > $f.d$d.fa.rapsi_k5.gz; zcat $f.d$d.fa.rapsi_k5.gz | awk '$1==$2' | cut -f1 | uniq | wc -l; 
+done
+
 # mkdir -p /tmp/ramdisk && sudo mount -t tmpfs -o size=8G tmpfs /tmp/ramdisk 
 
 ## 

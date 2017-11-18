@@ -26,8 +26,14 @@ from multiprocessing import Pool, Process, Queue
 aminos = 'ACDEFGHIKLMNPQRSTVWY' #alphanumeric="".join(chr(i) for i in range(48,58)+range(65,91))
 aminoset = set(aminos)
 nucleotides = 'AGCT' # order is important as complement bases (A-T and G-C) will be exchanged later
-DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+#DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
 
+aa2digit = {'A': '0', 'C': '1', 'E': '3', 'D': '2', 'G': '5', 'F': '4', 'I': '7', 'H': '6', 'K': '8', 'M': 'A',
+            'L': '9', 'N': 'B', 'Q': 'D', 'P': 'C', 'S': 'F', 'R': 'E', 'T': 'G', 'W': 'I', 'V': 'H', 'Y': 'J'}
+base2digit = {'A': '0', 'G': '1', 'C': '2', 'T': '3'}
+DNAcomplement = {'0': '3', '1': '2', '2': '1', '3': '0'}
+
+# alphabet recoding
 # http://www.rpgroup.caltech.edu/publications/supplements/alphabets/HP/Welcome.html
 ## MFILV, ACW, YQHPGTSN, RK, DE
 mj5 = {'A': '1', 'C': '1', 'E': '4', 'D': '4', 'G': '2', 'F': '0', 'I': '0', 'H': '2', 'K': '3', 'M': '0',
@@ -35,15 +41,14 @@ mj5 = {'A': '1', 'C': '1', 'E': '4', 'D': '4', 'G': '2', 'F': '0', 'I': '0', 'H'
 ## MFILV, A, C, WYQHPGTSN, RK, DE
 mj6 = {'A': '1', 'C': '2', 'E': '5', 'D': '5', 'G': '3', 'F': '0', 'I': '0', 'H': '3', 'K': '4', 'M': '0',
        'L': '0', 'N': '3', 'Q': '3', 'P': '3', 'S': '3', 'R': '4', 'T': '3', 'W': '3', 'V': '0', 'Y': '3'}
-aa2digit = {'A': '0', 'C': '1', 'E': '3', 'D': '2', 'G': '5', 'F': '4', 'I': '7', 'H': '6', 'K': '8', 'M': 'A',
-            'L': '9', 'N': 'B', 'Q': 'D', 'P': 'C', 'S': 'F', 'R': 'E', 'T': 'G', 'W': 'I', 'V': 'H', 'Y': 'J'}
-reduced_alphabet = mj6 #aa2digit #
+#aa2digit = mj6
 
 # recode di-nucleotides as base16 (0-F) characters (hexadecimal system)
 di2hex = {'AA': '0', 'AC': '2', 'GT': '7', 'AG': '1', 'CC': 'A', 'CA': '8', 'CG': '9', 'TT': 'F',
           'GG': '5', 'GC': '6', 'AT': '3', 'GA': '4', 'TG': 'D', 'TA': 'C', 'TC': 'E', 'CT': 'B'}
 HEXcomplement = {'A': '5', 'C': '3', 'B': '4', 'E': '1', 'D': '2', 'F': '0', '1': 'E', '0': 'F',
                  '3': 'C', '2': 'D', '5': 'A', '4': 'B', '7': '8', '6': '9', '9': '6', '8': '7'}
+#base2digit, DNAcomplement = di2hex, HEXcomplement
 
 def memory_usage():
     """Return memory usage in MB"""
@@ -62,33 +67,23 @@ def decode(base, alphabet, n=0):
         n += alphabet.index(char) * (len(alphabet) ** (len(base) - i))
     return n  
     
-def aaseq2mers(seq, kmer, step, aminoset=set(reduced_alphabet.values())): #reduced_alphabet
+def aaseq2mers(seq, step, kmer=5, aminoset=set(aa2digit.values())): 
     """Kmers generator for amino seq"""
     # reduce sequence
-    seq = "".join(reduced_alphabet[aa] if aa in reduced_alphabet else "-" for aa in seq)
+    seq = "".join(aa2digit[aa] if aa in aa2digit else "-" for aa in seq)
     mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))
     # return int representation of mer starting from 1
     return [int(mer, base=len(aminoset))+1 for mer in filter(lambda x: "-" not in x, mers)]
 
-def reverse_complement(mer, DNAcomplement=DNAcomplement):
+def complement(mer):
     """Return DNA reverse complement"""
-    return reversed(complement(mer, DNAcomplement))
+    return "".join(DNAcomplement[b] for b in mer)
     
-def complement(mer, complementDict=HEXcomplement):
-    """Return DNA reverse complement"""
-    return "".join(complementDict[b] for b in mer if b in complementDict)
-    
-def dnaseq2mers(seq, kmer, step, baseset=set(di2hex.values())):
+def dnaseq2mers(seq, step, kmer=11, baseset=set(base2digit.values())):
     """Kmers generator for DNA seq"""
-    # reduce sequence & kmer since using dinucleotides
-    kmer /= 2
-    merspace = len(di2hex)**kmer/2
-    # as adding dinucleotides, need to shift sequence by 1 as well
-    diseq = [] 
-    for j in (0, 1):
-        diseq.append("".join(di2hex[seq[i:i+2]] if seq[i:i+2] in di2hex else "-" for i in xrange(j, len(seq)-2, 2)))
-    # dinucleotides - shift by one to make sure both variants will be present
-    mers = set(seq[s:s+kmer] for seq in diseq for s in xrange(0, len(seq)-kmer, step))
+    merspace = len(base2digit)**kmer/2
+    seq = "".join(base2digit[b] if b in base2digit else "-" for b in seq)
+    mers = set(seq[s:s+kmer] for s in xrange(0, len(seq)-kmer, step))
     # return int representation of mer starting from 1, return complement if mer>=merspace
     return [int(mer, base=len(baseset))+1 if int(mer, base=len(baseset))<merspace
             else int(complement(mer), base=len(baseset))+1
@@ -175,17 +170,17 @@ def worker1(inQ, parser, nproc):
     for i in range(nproc):
         inQ.put(None)
         
-def worker2(inQ, outQ, kmer, step, seq2mers):
+def worker2(inQ, outQ, step, seq2mers):
     """Hashing sequences from the queue"""
     for data in iter(inQ.get, 1):
         if not data:
             break
         seqid, seq = data
         # get mers from upper-case seq
-        outQ.put((seqid, seq2mers(seq.upper(), kmer, step)))
+        outQ.put((seqid, seq2mers(seq.upper(), step)))
     outQ.put(None)
     
-def hash_sequences_multi(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
+def hash_sequences_multi(parser, step, dna, kmerfrac, tmpdir='/tmp', \
                          tmpfiles=1000, nproc=4, verbose=1): 
     """Parse input fasta and generate hash table."""
     if verbose:
@@ -204,7 +199,7 @@ def hash_sequences_multi(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     Process(target=worker1, args=(inQ, parser, nproc)).start()
     # multiple threads for hashing
     for i in range(nproc):
-        Process(target=worker2, args=(inQ, outQ, kmer, step, seq2mers)).start()        
+        Process(target=worker2, args=(inQ, outQ, step, seq2mers)).start()        
     # hash sequences
     i = stops = 0
     for data in iter(outQ.get, 1):
@@ -223,7 +218,7 @@ def hash_sequences_multi(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     sys.stderr.write(info%(memory_usage(), seqlimit))
     return files, seqlimit
 
-def hash_sequences_single(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
+def hash_sequences_single(parser, step, dna, kmerfrac, tmpdir='/tmp', \
                           tmpfiles=1000, nproc=1, verbose=1):
     """Parse input fasta and generate hash table."""
     if verbose:
@@ -239,7 +234,7 @@ def hash_sequences_single(parser, kmer, step, dna, kmerfrac, tmpdir='/tmp', \
     # hash sequences & get mers from upper-case seq
     i = 0
     for i, (seqid, seq) in enumerate(parser, 1):
-        for mer in seq2mers(seq.upper(), kmer, step):
+        for mer in seq2mers(seq.upper(), step):
             files[mer%len(files)].write("%s\t%s\n"%(mer, seqid))
     # set seqlimit only if >10k sequences
     seqlimit = int(round(kmerfrac * i / 100)) if i > 1e5 else i
@@ -334,7 +329,7 @@ def _connect(db, host, port, user, pswd):
     cur = cnx.cursor()
     return cur
     
-def dbConnect(db, host, port, user, pswd, table, kmer, verbose, replace):
+def dbConnect(db, host, port, user, pswd, table, verbose, replace):
     """Get connection and create empty table.
     Exit if table exists and no overwritting."""
     if verbose:
@@ -355,13 +350,13 @@ def dbConnect(db, host, port, user, pswd, table, kmer, verbose, replace):
     # create table #index added after compression PRIMARY KEY
     #cmd = 'CREATE TABLE `%s` (`hash` CHAR(%s), `protids` BLOB, INDEX `idx_hash` (hash)) ENGINE=MyISAM'%(table, kmer)
     ## INT - optimise it
-    cmd = 'CREATE TABLE `%s` (`hash` INT(%s), `protids` BLOB, INDEX `idx_hash` (hash)) ENGINE=MyISAM'%(table, kmer)
+    cmd = 'CREATE TABLE `%s` (`hash` INT, `protids` BLOB, INDEX `idx_hash` (hash)) ENGINE=MyISAM'%(table, )
     if verbose:
         sys.stderr.write(" %s\n"%cmd)
     cur.execute(cmd)
     return cur
 
-def dbConnect_sqlite(db, table, kmer, verbose, replace):
+def dbConnect_sqlite(db, table, verbose, replace):
     """Get connection and create empty table.
     Exit if table exists and no overwritting."""
     if verbose:
@@ -388,7 +383,7 @@ def dbConnect_sqlite(db, table, kmer, verbose, replace):
     cur.execute("CREATE TABLE meta_data (key TEXT, value TEXT)")
     cur.execute("CREATE TABLE file_data (file_number INTEGER, name TEXT)")
     cur.execute("CREATE TABLE offset_data (key INTEGER PRIMARY KEY, file_number INTEGER, seqname TEXT, offset INTEGER, length INTEGER)")
-    cur.execute("CREATE TABLE %s (hash INT(%s), protids array)"%(table, kmer))
+    cur.execute("CREATE TABLE %s (hash INT, protids array)"%(table, ))
     return cur
             
 def main(): 
@@ -400,8 +395,8 @@ def main():
     parser.add_argument('--version', action='version', version='%(prog)s 1.5a')   
     parser.add_argument("-i", "--input",      nargs="*",
                         help="fasta file(s)   [get seqs from db]")
-    parser.add_argument("-k", "--kmer",       default=10, type=int, 
-                        help="hash length     [%(default)s]")
+    #parser.add_argument("-k", "--kmer",       default=5, type=int, 
+    #                    help="hash length     [%(default)s]")
     parser.add_argument("-r", "--replace",    default=False, action="store_true",
                         help="overwrite table if exists")
     parser.add_argument("-s", "--step",       default=1, type=int, 
@@ -441,6 +436,11 @@ def main():
     if o.verbose:
         sys.stderr.write("Options: %s\n"%str(o))
 
+    # create tmp dir
+    if not os.path.isdir(o.tmpdir):
+        os.makedirs(o.tmpdir)
+
+    # define hash_sequences function
     hash_sequences = hash_sequences_multi
     if o.nprocs<2:
         hash_sequences = hash_sequences_single
@@ -448,15 +448,15 @@ def main():
     # get sequence parser
     if o.input:
         # prepare database
-        cur = dbConnect_sqlite(o.db, o.table, o.kmer, o.verbose, o.replace)
+        cur = dbConnect_sqlite(o.db, o.table, o.verbose, o.replace)
         # get parser
         parser = fasta_parser(o.input, cur, o.verbose)
         # hash seqs
         t0 = datetime.now()
-        files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
+        files, seqlimit = hash_sequences(parser, o.step, o.dna, o.kmerfrac, \
                                          o.tmpdir, o.tempfiles, o.nprocs, o.verbose)
         t1 = datetime.now()
-        print t1-t0#; return
+        print t1-t0, os.system('du -sh %s'%o.tmpdir)#; return
         # upload
         batch_insert(files, cur, o.table, seqlimit, o.nprocs, o.verbose)
         t2 = datetime.now()
@@ -467,12 +467,12 @@ def main():
         if pswd==None:
             pswd = getpass.getpass("Enter MySQL password: ")
         # connect
-        cur = dbConnect(o.db, o.host, o.port, o.user, pswd, o.table, o.kmer, o.verbose, \
+        cur = dbConnect(o.db, o.host, o.port, o.user, pswd, o.table, o.verbose, \
                         o.replace)
         # get parser
         parser = db_seq_parser(cur, o.cmd, o.verbose)
         # hash seqs
-        files, seqlimit = hash_sequences(parser, o.kmer, o.step, o.dna, o.kmerfrac, \
+        files, seqlimit = hash_sequences(parser, o.step, o.dna, o.kmerfrac, \
                                          o.tmpdir, o.tempfiles, o.nprocs, o.verbose)
         # upload
         upload(files, o.db, o.host, o.port, o.user, pswd, o.table, seqlimit, o.dtype, \
