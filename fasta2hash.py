@@ -23,32 +23,14 @@ from datetime import datetime
 from Bio import SeqIO, bgzf
 from multiprocessing import Pool, Process, Queue
 
-aminos = 'ACDEFGHIKLMNPQRSTVWY' #alphanumeric="".join(chr(i) for i in range(48,58)+range(65,91))
+aminos = 'ACDEFGHIKLMNPQRSTVWY' # alphanumeric="".join(chr(i) for i in range(48,58)+range(65,91))
 aminoset = set(aminos)
 nucleotides = 'AGCT' # order is important as complement bases (A-T and G-C) will be exchanged later
-#DNAcomplement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
 
 aa2digit = {'A': '0', 'C': '1', 'E': '3', 'D': '2', 'G': '5', 'F': '4', 'I': '7', 'H': '6', 'K': '8', 'M': 'A',
             'L': '9', 'N': 'B', 'Q': 'D', 'P': 'C', 'S': 'F', 'R': 'E', 'T': 'G', 'W': 'I', 'V': 'H', 'Y': 'J'}
 base2digit = {'A': '0', 'G': '1', 'C': '2', 'T': '3'}
 DNAcomplement = {'0': '3', '1': '2', '2': '1', '3': '0'}
-
-# alphabet recoding
-# http://www.rpgroup.caltech.edu/publications/supplements/alphabets/HP/Welcome.html
-## MFILV, ACW, YQHPGTSN, RK, DE
-mj5 = {'A': '1', 'C': '1', 'E': '4', 'D': '4', 'G': '2', 'F': '0', 'I': '0', 'H': '2', 'K': '3', 'M': '0',
-       'L': '0', 'N': '2', 'Q': '2', 'P': '2', 'S': '2', 'R': '3', 'T': '2', 'W': '1', 'V': '0', 'Y': '2'}
-## MFILV, A, C, WYQHPGTSN, RK, DE
-mj6 = {'A': '1', 'C': '2', 'E': '5', 'D': '5', 'G': '3', 'F': '0', 'I': '0', 'H': '3', 'K': '4', 'M': '0',
-       'L': '0', 'N': '3', 'Q': '3', 'P': '3', 'S': '3', 'R': '4', 'T': '3', 'W': '3', 'V': '0', 'Y': '3'}
-#aa2digit = mj6
-
-# recode di-nucleotides as base16 (0-F) characters (hexadecimal system)
-di2hex = {'AA': '0', 'AC': '2', 'GT': '7', 'AG': '1', 'CC': 'A', 'CA': '8', 'CG': '9', 'TT': 'F',
-          'GG': '5', 'GC': '6', 'AT': '3', 'GA': '4', 'TG': 'D', 'TA': 'C', 'TC': 'E', 'CT': 'B'}
-HEXcomplement = {'A': '5', 'C': '3', 'B': '4', 'E': '1', 'D': '2', 'F': '0', '1': 'E', '0': 'F',
-                 '3': 'C', '2': 'D', '5': 'A', '4': 'B', '7': '8', '6': '9', '9': '6', '8': '7'}
-#base2digit, DNAcomplement = di2hex, HEXcomplement
 
 def memory_usage():
     """Return memory usage in MB"""
@@ -257,12 +239,12 @@ def worker(inQ, outQ, dtype, seqlimit):
                         mer2protids[mer] = []
             else:
                 mer2protids[mer] = [protid]
-        #convert to np.array compressed string representation
+        # convert to np.array compressed string representation
         for mer, protids in mer2protids.iteritems():
             outQ.put((mer, np.array(protids, dtype=dtype).tostring()))
-        #remove tmp file
+        # remove tmp file
         os.unlink(fn)
-        #garbage collection
+        # garbage collection
         del mer2protids
         gc.collect()
     outQ.put(None)
@@ -349,8 +331,8 @@ def dbConnect(db, host, port, user, pswd, table, verbose, replace):
             sys.exit('Table %s already exists!'%table)
     # create table #index added after compression PRIMARY KEY
     #cmd = 'CREATE TABLE `%s` (`hash` CHAR(%s), `protids` BLOB, INDEX `idx_hash` (hash)) ENGINE=MyISAM'%(table, kmer)
-    ## INT - optimise it
-    cmd = 'CREATE TABLE `%s` (`hash` INT, `protids` BLOB, INDEX `idx_hash` (hash)) ENGINE=MyISAM'%(table, )
+    ## INT - optimise it MEDIUMINT (16M) will be enough for k=5 aminos (3.2) and k=11 DNA (2M)
+    cmd = 'CREATE TABLE `%s` (`hash` MEDIUMINT UNSIGNED, `protids` BLOB, INDEX `idx_hash` (hash)) ENGINE=MyISAM'%(table, )
     if verbose:
         sys.stderr.write(" %s\n"%cmd)
     cur.execute(cmd)
@@ -362,24 +344,24 @@ def dbConnect_sqlite(db, table, verbose, replace):
     if verbose:
         info = "[%s] Preparing sqlite3 database: %s ...\n"
         sys.stderr.write(info%(datetime.ctime(datetime.now()), db))
-    #check if db exists
+    # check if db exists
     if os.path.isfile(db):
-        #replace or exit
+        # replace or exit
         if replace:
             os.unlink(db)            
         else:
             sys.exit(" Database %s already exists!"%db)
-    #connect
+    # connect
     cnx = sqlite3.connect(db)
-    #enable utf8 handling
+    # enable utf8 handling
     cnx.text_factory = str 
     cur = cnx.cursor()
-    ##bullshit? no time diff
-    #asyn execute >50x faster ##http://www.sqlite.org/pragma.html#pragma_synchronous 
-    #http://stackoverflow.com/questions/1711631/how-do-i-improve-the-performance-of-sqlite
+    ## bullshit? no time diff
+    # asyn execute >50x faster ##http://www.sqlite.org/pragma.html#pragma_synchronous 
+    # http://stackoverflow.com/questions/1711631/how-do-i-improve-the-performance-of-sqlite
     cur.execute("PRAGMA synchronous=OFF")
     cur.execute("PRAGMA journal_mode = MEMORY")
-    #prepare tables and indices PRIMARY KEY
+    # prepare tables and indices PRIMARY KEY
     cur.execute("CREATE TABLE meta_data (key TEXT, value TEXT)")
     cur.execute("CREATE TABLE file_data (file_number INTEGER, name TEXT)")
     cur.execute("CREATE TABLE offset_data (key INTEGER PRIMARY KEY, file_number INTEGER, seqname TEXT, offset INTEGER, length INTEGER)")
