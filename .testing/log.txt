@@ -15,38 +15,38 @@ f=test/hg19.fa
 samtools faidx $f 'chr1:10000-200080' | ./fasta2hits.py -v --dna -d $f.db3 --seqlimit 5
 
 # swissprot
-f=test3/sprot.gz
+f=test/sprot.gz
 curl ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz | zcat | bgzip > $f
-./fasta2hash.py -v -i $f -d $f.db3 # 12min 0:12:26 vs 0:05:04 after optimisation
+./fasta2hash.py -v -i $f -d $f.db3 # 12min 0:12:26 vs 0:05:04 after optimisation vs 0:04:14 for k5
 ./fasta2hits.py --random 1 -d $f.db3 | ./fasta2hits.py -v -d $f.db3
 
 # testing
-for d in 00 05 10 15 20; do 
-echo `date` $d; if [ ! -s $f.d$d.fa ]; then ~/src/rapsi/fasta2hits.py --random 1000 -d $f.db3 | filter_fasta.py -l100 -w1000000 | grep -v '^$' | head -n 400 | fasta2diverged.py -d 0.$d > $f.d$d.fa; fi; ~/src/rapsi/fasta2hits.py -d $f.db3 -i $f.d$d.fa | gzip > $f.d$d.fa.rapsi.gz; zcat $f.d$d.fa.rapsi.gz | awk '$1==$2' | cut -f1 | uniq | wc -l; 
+for d in 00 05 10 15 20 25 30 35 40 45 50; do 
+echo `date` $d; if [ ! -s $f.d$d.fa ]; then ~/src/rapsi/fasta2hits.py --random 1000 -d $f.db3 | filter_fasta.py -l100 -w1000000 | grep -v '^$' | head -n 400 | fasta2diverged.py -d 0.$d > $f.d$d.fa; fi; ~/src/rapsi/fasta2hits.py -d $f.db3 -i $f.d$d.fa -n 1 -s 5 | gzip > $f.d$d.fa.rapsi.gz; zcat $f.d$d.fa.rapsi.gz | awk '$1==$2' | cut -f1 | uniq | wc -l; 
 done
 
-for d in 00 05 10 15 20; do 
-echo `date` $d; if [ ! -s $f.d$d.fa ]; then ~/src/rapsi/fasta2hits.py --random 1000 -d $f.db3 | filter_fasta.py -l100 -w1000000 | grep -v '^$' | head -n 400 | fasta2diverged.py -d 0.$d > $f.d$d.fa; fi; ~/src/rapsi/fasta2hits.py -d $f.db3.k5 -i $f.d$d.fa -k5 | gzip > $f.d$d.fa.rapsi_k5.gz; zcat $f.d$d.fa.rapsi_k5.gz | awk '$1==$2' | cut -f1 | uniq | wc -l; 
+for d in 00 05 10 15 20 25 30 35 40 45 50; do k5
+echo `date` $d; if [ ! -s $f.d$d.fa ]; then ~/src/rapsi/fasta2hits.py --random 1000 -d $f.db3 | filter_fasta.py -l100 -w1000000 | grep -v '^$' | head -n 200 | fasta2diverged.py -d 0.$d > $f.d$d.fa; fi; ~/src/rapsi/fasta2hits.py -d $f.db3 -i $f.d$d.fa -n 1 -s 1 | gzip > $f.d$d.fa.rapsi.gz; zcat $f.d$d.fa.rapsi.gz | awk '$1==$2' | cut -f1 | uniq | wc -l; 
 done
 
 # mkdir -p /tmp/ramdisk && sudo mount -t tmpfs -o size=8G tmpfs /tmp/ramdisk 
 
 ## 
 # pfam
-f=test3/pfam.gz
+f=test/pfam.gz
 curl ftp://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/pfamseq.gz | zcat | bgzip > $f
 
 
 # nr
 f=test3/nr.gz
 curl ftp://ftp.ncbi.nlm.nih.gov/blast/db/FASTA/nr.gz | zcat | bgzip > $f
-./fasta2hash.py -v -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp # 
+./fasta2hash.py -v -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp/nr # 10:59:41 403G tmp
 
 
 # nt
-f=test3/nt.gz
+f=test3/nt.gz; 
 curl ftp://ftp.ncbi.nlm.nih.gov/blast/db/FASTA/nt.gz | zcat | bgzip > $f
-./fasta2hash.py -v --dna -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp # 
+./fasta2hash.py -v --dna -i $f -d $f.db3 --tmpdir /mnt/data/lpryszcz/tmp/nt # 
 
 
 ## v1.4
