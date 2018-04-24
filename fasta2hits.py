@@ -417,7 +417,7 @@ def main():
                         help="server port     [%(default)s]")
     mysqlo.add_argument("--host",            default='cgenomics.crg.es', 
                         help="database host   [%(default)s]")
-    parser.add_argument("--seqcmd",           default="select protid, seq from protid2seq where protid in (%s)", 
+    parser.add_argument("-c", "--seqcmd",    default="select protid, seq from protid2seq where protid in (%s)", 
                         help="SQL to fetch sequences [%(default)s]")
     mysqlo.add_argument("--dtype",            default="uint32", 
                         help="numpy data type for protids [%(default)s] ie. S8 for VARCHAR(8) or uint16 for SMALLINT UNSIGNED")
