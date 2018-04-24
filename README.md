@@ -114,7 +114,6 @@ Later, the target sequences can be search for similarity with FASTA or FASTQ-for
   -l LIMIT, --limit LIMIT
                         stop after      [all]
   --random RANDOM       return N random sequence(s) and exit [0]
-  --seqcmd SEQCMD       SQL to fetch sequences [select protid, seq from protid2seq where p.protid in (%s)]
 ```
 
 - Similarity search options:
@@ -146,6 +145,9 @@ Later, the target sequences can be search for similarity with FASTA or FASTQ-for
   --dtype DTYPE         numpy data type for protids [uint32] ie. S8 for VARCHAR(8) or uint16 for SMALLINT UNSIGNED
   -z DBLENGTH, --dblength DBLENGTH
                         database length for E-value calculation [0]
+  -c SEQCMD, --seqcmd SEQCMD
+                        SQL to fetch sequences [select protid, seq from protid2seq where protid in (%s)]
+  
 ```
 
 ### Test run
